@@ -7,11 +7,11 @@ use serde::{Deserialize, Serialize};
 struct System {
     constellation_id: Option<i64>,
     name: String,
-    planets: Vec<Planet>,
+    planets: Option<Vec<Planet>>,
     position: Position,
     security_class: Option<String>,
     security_status: f64,
-    star_id: i64,
+    star_id: Option<i64>,
     stargates: Option<Vec<i64>>,
     system_id: i64,
 }
@@ -31,7 +31,7 @@ struct Position {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>>{
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>{
     let client = Client::new();
     let uri = "bolt://localhost:7687";
     let user = "neo4j";
@@ -40,13 +40,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>>{
     let graph = Arc::new(Graph::new(uri, user, pass).await.unwrap());
 
     let system_ids = get_system_ids(&client).await.unwrap();
-    // let mut handles = vec![];
+    let mut handles = vec![];
+    let mut failed_systems = Vec::new();
 
     for system_id in system_ids {
-        let system_details = get_system_details(&client, system_id).await?;
-        save_system_to_neo4j(&graph, &system_details).await?;
-        print!("{:?}, ", system_details.system_id);
-    };
+        let client_clone = client.clone(); // Clone the client before moving it into the async block
+        let graph = graph.clone();
+        let handle = tokio::spawn(async move {
+            match get_system_details(&client_clone, system_id).await {
+                Ok(system_details) => {
+                    if let Err(err) = save_system_to_neo4j(&graph, &system_details).await {
+                        eprintln!("Error saving system {}: {}", system_details.system_id, err);
+                    } else {
+                        print!("{:?}, ", system_details.system_id);
+                    }
+                }
+                Err(err) => {
+                    eprintln!("Error getting system details for system {}: {}", system_id, err);
+                    failed_systems.push(system_id);
+                }
+            }
+
+            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+        });
+
+        handles.push(handle);
+    }
+
+    futures::future::try_join_all(handles).await?;
+    println!("Failed systems: {:?}", failed_systems);
 
     Ok(())
 }
@@ -85,13 +107,14 @@ async fn save_system_to_neo4j(graph: &Arc<Graph>, system: &System) -> Result<(),
     let planets_json = serde_json::to_string(&system.planets).unwrap();
     let security_class_param = system.security_class.as_ref().map(|s| s.as_str()).unwrap_or("");
     let stargates = serde_json::to_string(&system.stargates).unwrap();
+    let star_id = serde_json::to_string(&system.star_id).unwrap();
 
     graph.run(query(&create_statement)
         .param("system_id", system.system_id)
         .param("name", &*system.name)
         .param("constellation_id", constellation_id)
         .param("security_status", system.security_status)
-        .param("star_id", system.star_id)
+        .param("star_id", star_id)
         .param("security_class", security_class_param)
         .param("x", system.position.x)
         .param("y", system.position.y)
