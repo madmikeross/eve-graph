@@ -1,5 +1,6 @@
 use neo4rs::{Graph, query};
 use std::sync::Arc;
+use futures::StreamExt;
 use reqwest::{Client};
 use serde::{Deserialize, Serialize};
 
@@ -39,10 +40,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>{
 
     let system_pulls: Vec<_> = system_ids
         .iter()
-        .map(|&system_id| tokio::spawn(pull_system(client.clone(), graph.clone(), system_id)))
+        .map(|&system_id| tokio::spawn(pull_system_if_missing(client.clone(), graph.clone(), system_id)))
         .collect();
 
     futures::future::try_join_all(system_pulls).await?;
+
+    Ok(())
+}
+
+async fn pull_system_if_missing(
+    client: Client,
+    graph: Arc<Graph>,
+    system_id: i64,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if !system_id_exists(&graph, system_id).await? {
+        pull_system(client, graph, system_id).await?;
+    } else {
+        println!("System {} already exists in the database.", system_id);
+    }
 
     Ok(())
 }
@@ -54,14 +69,14 @@ async fn pull_system(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match get_system_details(&client, system_id).await {
         Ok(system_details) => {
-            if let Err(err) = save_system_to_neo4j(&graph, &system_details).await {
-                eprintln!("Error saving system {}: {}", system_details.system_id, err);
+            if let Err(err) = save_system(&graph, &system_details).await {
+                println!("Error saving system {}: {}", system_details.system_id, err);
             } else {
                 print!("{:?}, ", system_details.system_id);
             }
         }
         Err(err) => {
-            eprintln!("Error getting system details for system {}: {}", system_id, err);
+            println!("Error getting system details for system {}: {}", system_id, err);
         }
     }
 
@@ -87,7 +102,18 @@ async fn get_system_ids(client: &Client) -> Result<Vec<i64>, reqwest::Error> {
     response.json().await
 }
 
-async fn save_system_to_neo4j(graph: &Arc<Graph>, system: &System) -> Result<(), neo4rs::Error> {
+async fn system_id_exists(graph: &Graph, system_id: i64) -> Result<bool, neo4rs::Error> {
+    let system_exists = "MATCH (s:System {system_id: $system_id}) RETURN COUNT(s) as count LIMIT 1";
+    let mut result = graph.execute(query(system_exists).param("system_id", system_id)).await?;
+
+    if let Some(row) = result.next().await? {
+        Ok(row.get::<i64>("count").map_or(false, |count| count > 0))
+    } else {
+        Ok(false)
+    }
+}
+
+async fn save_system(graph: &Arc<Graph>, system: &System) -> Result<(), neo4rs::Error> {
     let create_statement = "
         CREATE (s:System {
             system_id: $system_id,

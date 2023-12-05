@@ -13,10 +13,8 @@ Currently, the application will:
 Known issues:
 * Current structures that represent EVE concepts do not yet model all the variations in the ESI system data (ie some developer only systems are missing stargates entirely).
 * High concurrency becomes an issue when the ESI API returns an error. While each response contains an error allowance and backoff timer, this application does not currently backoff and will cascade into being rate limited.
-* Systems which were previously fetched are re-fetched on each run of the application.
 
 Next steps:
-* Memoize or cache which systems have previously been successfully fetched and stored in the db.
 * Build a dead letter queue of system ids for system detail queries that fail.
 * Implement a check which will backoff ESI queries when failures are observed or rate limiting begins.
 * Iterate through specific system detail query failures and adjust the corresponding structures.
