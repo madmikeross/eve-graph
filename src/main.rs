@@ -1,6 +1,6 @@
 use neo4rs::{Graph, query};
 use std::sync::Arc;
-use reqwest::{Client};
+use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
@@ -41,7 +41,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>{
 
     let system_ids = get_system_ids(&client).await.unwrap();
     let mut handles = vec![];
-    let mut failed_systems = Vec::new();
 
     for system_id in system_ids {
         let client_clone = client.clone(); // Clone the client before moving it into the async block
@@ -57,7 +56,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>{
                 }
                 Err(err) => {
                     eprintln!("Error getting system details for system {}: {}", system_id, err);
-                    failed_systems.push(system_id);
                 }
             }
 
@@ -68,7 +66,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>{
     }
 
     futures::future::try_join_all(handles).await?;
-    println!("Failed systems: {:?}", failed_systems);
 
     Ok(())
 }
@@ -76,15 +73,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>{
 async fn get_system_details(client: &Client, system_id: i64) -> Result<System, reqwest::Error> {
     let system_detail_url = format!("https://esi.evetech.net/latest/universe/systems/{}", system_id);
     let response = client.get(&system_detail_url).send().await?;
-    let system_details: System = response.json().await?;
-    Ok(system_details)
+    return response.json().await;
 }
 
 async fn get_system_ids(client: &Client) -> Result<Vec<i64>, reqwest::Error> {
     let systems_url = "https://esi.evetech.net/latest/universe/systems/";
     let response = client.get(systems_url).send().await?;
-    let system_ids: Vec<i64> = response.json().await?;
-    Ok(system_ids)
+    return response.json().await?;
 }
 
 async fn save_system_to_neo4j(graph: &Arc<Graph>, system: &System) -> Result<(), neo4rs::Error> {
