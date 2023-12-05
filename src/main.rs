@@ -1,12 +1,12 @@
 use neo4rs::{Graph, query};
 use std::sync::Arc;
-use reqwest::{Client, StatusCode};
+use reqwest::{Client};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
 struct System {
     constellation_id: Option<i64>,
-    name: String,
+    name: Option<String>,
     planets: Option<Vec<Planet>>,
     position: Position,
     security_class: Option<String>,
@@ -73,13 +73,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>{
 async fn get_system_details(client: &Client, system_id: i64) -> Result<System, reqwest::Error> {
     let system_detail_url = format!("https://esi.evetech.net/latest/universe/systems/{}", system_id);
     let response = client.get(&system_detail_url).send().await?;
-    return response.json().await;
+    response.json().await
 }
 
 async fn get_system_ids(client: &Client) -> Result<Vec<i64>, reqwest::Error> {
     let systems_url = "https://esi.evetech.net/latest/universe/systems/";
     let response = client.get(systems_url).send().await?;
-    return response.json().await?;
+    response.json().await
 }
 
 async fn save_system_to_neo4j(graph: &Arc<Graph>, system: &System) -> Result<(), neo4rs::Error> {
@@ -101,12 +101,13 @@ async fn save_system_to_neo4j(graph: &Arc<Graph>, system: &System) -> Result<(),
     let constellation_id = serde_json::to_string(&system.constellation_id).unwrap();
     let planets_json = serde_json::to_string(&system.planets).unwrap();
     let security_class_param = system.security_class.as_ref().map(|s| s.as_str()).unwrap_or("");
+    let name_param = system.name.as_ref().map(|s| s.as_str()).unwrap_or("");
     let stargates = serde_json::to_string(&system.stargates).unwrap();
     let star_id = serde_json::to_string(&system.star_id).unwrap();
 
     graph.run(query(&create_statement)
         .param("system_id", system.system_id)
-        .param("name", &*system.name)
+        .param("name", name_param)
         .param("constellation_id", constellation_id)
         .param("security_status", system.security_status)
         .param("star_id", star_id)
