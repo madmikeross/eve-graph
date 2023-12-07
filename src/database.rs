@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use futures::StreamExt;
 use neo4rs::{Graph, query};
 use serde::Deserialize;
 
@@ -52,26 +51,44 @@ pub(crate) async fn save_system(graph: &Arc<Graph>, system: &System) -> Result<(
             stargates: $stargates
         })";
 
-    let constellation_id = serde_json::to_string(&system.constellation_id).unwrap();
-    let planets_json = serde_json::to_string(&system.planets).unwrap();
-    let security_class_param = system.security_class.as_ref().map(|s| s.as_str()).unwrap_or("");
-    let name_param = system.name.as_ref().map(|s| s.as_str()).unwrap_or("");
-    let stargates = serde_json::to_string(&system.stargates).unwrap();
-    let star_id = serde_json::to_string(&system.star_id).unwrap();
-
     graph.run(query(&create_statement)
         .param("system_id", system.system_id)
-        .param("name", name_param)
-        .param("constellation_id", constellation_id)
+        .param("name", system.name.clone())
+        .param("constellation_id", system.constellation_id)
         .param("security_status", system.security_status)
-        .param("star_id", star_id)
-        .param("security_class", security_class_param)
+        .param("star_id", system.star_id)
+        .param("security_class", system.security_class.clone())
         .param("x", system.x)
         .param("y", system.y)
         .param("z", system.z)
-        .param("planets", planets_json)
-        .param("stargates", stargates))
+        .param("planets", system.planets.clone())
+        .param("stargates", system.stargates.clone()))
         .await?;
 
     Ok(())
+}
+
+async fn get_system(graph: Arc<Graph>, system_id: i64) -> Result<Option<System>, neo4rs::Error> {
+    let get_system_statement = "MATCH (system:System {system_id: $system_id}) RETURN system LIMIT 1";
+    let mut result = graph.execute(query(get_system_statement).param("system_id", system_id)).await?;
+
+    match result.next().await? {
+        Some(row) => {
+            let system: System = row.get("system").unwrap();
+            Ok(Some(system))
+        }
+        None => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::database::{get_graph_client, get_system};
+
+    #[tokio::test]
+    async fn should_read_system_from_database() {
+        let system_id = 30000201;
+        let system = get_system(get_graph_client().await, system_id).await;
+        assert_eq!(system.unwrap().unwrap().system_id, system_id)
+    }
 }
