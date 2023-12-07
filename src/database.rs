@@ -30,7 +30,10 @@ pub(crate) async fn system_id_exists(graph: &Graph, system_id: i64) -> Result<bo
     let system_exists = "MATCH (s:System {system_id: $system_id}) RETURN COUNT(s) as count LIMIT 1";
     let mut result = graph.execute(query(system_exists).param("system_id", system_id)).await?;
 
-    result.next().await.map(|row| row.map(|sys| sys.get::<i64>("count")).flatten().unwrap_or(0)).map(|count| count > 0)
+    match result.next().await? {
+        Some(row) => Ok(row.get::<i64>("count").map_or(false, |count| count > 0)),
+        None => Ok(false)
+    }
 }
 
 pub(crate) async fn save_system(graph: &Arc<Graph>, system: &System) -> Result<(), neo4rs::Error> {
