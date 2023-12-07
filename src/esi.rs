@@ -1,6 +1,5 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use crate::database::System;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct SystemEsiResponse {
@@ -45,12 +44,10 @@ pub(crate) struct Destination {
     system_id: i64,
 }
 
-pub(crate) async fn get_system_details(client: &Client, system_id: i64) -> Result<System, reqwest::Error> {
+pub(crate) async fn get_system_details(client: &Client, system_id: i64) -> Result<SystemEsiResponse, reqwest::Error> {
     let system_detail_url = format!("https://esi.evetech.net/latest/universe/systems/{}", system_id);
     let response = client.get(&system_detail_url).send().await?;
-    let system_esi_response: SystemEsiResponse = response.json().await?;
-
-    Ok(System::from(system_esi_response))
+    response.json().await
 }
 
 pub(crate) async fn get_stargate(client: &Client, stargate_id: i64) -> Result<Stargate, reqwest::Error> {

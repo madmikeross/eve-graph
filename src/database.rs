@@ -3,7 +3,6 @@ use std::sync::Arc;
 use futures::StreamExt;
 use neo4rs::{Graph, query};
 use serde::Deserialize;
-use crate::esi::SystemEsiResponse;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct System {
@@ -26,26 +25,6 @@ pub(crate) async fn get_graph_client() -> Arc<Graph> {
     let pass = "neo4jneo4j"; // assumes you have accessed via the browser and updated pass
     Arc::new(Graph::new(uri, user, pass).await.unwrap())
 }
-
-impl From<SystemEsiResponse> for System {
-    fn from(s: SystemEsiResponse) -> Self {
-        Self {
-            constellation_id: s.constellation_id,
-            name: s.name,
-            planets: s.planets.map(|planets| planets.into_iter().map(|planet| planet.planet_id).collect()),
-            x: s.position.x,
-            y: s.position.y,
-            z: s.position.z,
-            security_class: s.security_class,
-            security_status: s.security_status,
-            star_id: s.star_id,
-            stargates: s.stargates,
-            system_id: s.system_id,
-        }
-    }
-}
-
-
 
 pub(crate) async fn system_id_exists(graph: &Graph, system_id: i64) -> Result<bool, neo4rs::Error> {
     let system_exists = "MATCH (s:System {system_id: $system_id}) RETURN COUNT(s) as count LIMIT 1";
@@ -96,42 +75,4 @@ pub(crate) async fn save_system(graph: &Arc<Graph>, system: &System) -> Result<(
         .await?;
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use reqwest::Client;
-
-    use crate::database::{get_graph_client, save_system};
-    use crate::esi::{get_stargate, get_system_details};
-
-    #[tokio::test]
-    async fn can_save_system_to_database() {
-        let client = Client::new();
-        let graph = get_graph_client().await;
-
-        let system_id = 30000201;
-        let system = get_system_details(&client, system_id).await.unwrap();
-
-        match save_system(&graph, &system).await {
-            Ok(_) => {
-                //TODO: Delete the record created
-            }
-            Err(_) => panic!("Could not save system")
-        }
-    }
-
-    #[tokio::test]
-    async fn can_retrieve_and_parse_stargate() {
-        let client = Client::new();
-        let stargate_id = 50011905;
-        match get_stargate(&client, stargate_id).await {
-            Ok(stargate) => {
-                assert_eq!(stargate.stargate_id, stargate_id);
-            }
-            Err(err) => {
-                panic!("Error in test: {}", err);
-            }
-        }
-    }
 }
