@@ -6,7 +6,6 @@ use reqwest::Client;
 use crate::database::{get_graph_client, save_system, system_id_exists};
 use crate::esi::{get_system_details, get_system_ids};
 
-mod models;
 mod database;
 mod esi;
 

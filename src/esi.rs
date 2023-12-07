@@ -1,6 +1,6 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use crate::models::System;
+use crate::database::System;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct SystemEsiResponse {
