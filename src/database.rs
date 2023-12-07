@@ -30,10 +30,9 @@ pub(crate) async fn system_id_exists(graph: &Graph, system_id: i64) -> Result<bo
     let system_exists = "MATCH (s:System {system_id: $system_id}) RETURN COUNT(s) as count LIMIT 1";
     let mut result = graph.execute(query(system_exists).param("system_id", system_id)).await?;
 
-    if let Some(row) = result.next().await? {
-        Ok(row.get::<i64>("count").map_or(false, |count| count > 0))
-    } else {
-        Ok(false)
+    match result.next().await? {
+        Some(row) => Ok(row.get::<i64>("count").map_or(false, |count| count > 0)),
+        None => Ok(false)
     }
 }
 
