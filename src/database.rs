@@ -85,7 +85,24 @@ pub(crate) async fn save_system(graph: &Arc<Graph>, system: &System) -> Result<(
 #[cfg(test)]
 mod tests {
     use reqwest::Client;
-    use crate::database::get_stargate;
+    use crate::database::{get_graph_client, get_stargate, get_system_details, save_system};
+
+    #[tokio::test]
+    async fn can_save_system_to_database() {
+        let client = Client::new();
+        let graph = get_graph_client().await;
+
+        let system_id = 30000201;
+        let system = get_system_details(&client, system_id).await.unwrap();
+
+        match save_system(&graph, &system).await {
+            Ok(_) => {
+                //TODO: Delete the record created
+            }
+            Err(_) => panic!("Could not save system")
+        }
+
+    }
 
     #[tokio::test]
     async fn can_retrieve_and_parse_stargate() {
