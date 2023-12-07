@@ -3,20 +3,6 @@ use std::sync::Arc;
 use neo4rs::{Graph, query};
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
-pub(crate) struct System {
-    pub constellation_id: Option<i64>,
-    pub name: Option<String>,
-    pub planets: Option<Vec<i64>>,
-    pub x: f64,
-    pub y: f64,
-    pub z: f64,
-    pub security_class: Option<String>,
-    pub security_status: f64,
-    pub star_id: Option<i64>,
-    pub stargates: Option<Vec<i64>>,
-    pub system_id: i64,
-}
 
 pub(crate) async fn get_graph_client() -> Arc<Graph> {
     let uri = "bolt://localhost:7687";
@@ -33,6 +19,21 @@ pub(crate) async fn system_id_exists(graph: &Graph, system_id: i64) -> Result<bo
         Some(row) => Ok(row.get::<i64>("count").map_or(false, |count| count > 0)),
         None => Ok(false)
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct System {
+    pub constellation_id: Option<i64>,
+    pub name: Option<String>,
+    pub planets: Option<Vec<i64>>,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub security_class: Option<String>,
+    pub security_status: f64,
+    pub star_id: Option<i64>,
+    pub stargates: Option<Vec<i64>>,
+    pub system_id: i64,
 }
 
 pub(crate) async fn save_system(graph: &Arc<Graph>, system: &System) -> Result<(), neo4rs::Error> {
@@ -68,7 +69,7 @@ pub(crate) async fn save_system(graph: &Arc<Graph>, system: &System) -> Result<(
     Ok(())
 }
 
-async fn get_system(graph: Arc<Graph>, system_id: i64) -> Result<Option<System>, neo4rs::Error> {
+pub(crate) async fn get_system(graph: Arc<Graph>, system_id: i64) -> Result<Option<System>, neo4rs::Error> {
     let get_system_statement = "MATCH (system:System {system_id: $system_id}) RETURN system LIMIT 1";
     let mut result = graph.execute(query(get_system_statement).param("system_id", system_id)).await?;
 
@@ -79,6 +80,69 @@ async fn get_system(graph: Arc<Graph>, system_id: i64) -> Result<Option<System>,
         }
         None => Ok(None),
     }
+}
+
+pub(crate) struct Stargate {
+    pub destination_stargate_id: i64,
+    pub destination_system_id: i64,
+    pub name: String,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub stargate_id: i64,
+    pub system_id: i64,
+    pub type_id: i64,
+}
+
+pub(crate) async fn save_stargate(graph: Arc<Graph>, stargate: &Stargate) -> Result<(), neo4rs::Error> {
+    let create_statement = "
+        CREATE (sg:Stargate {
+            destination_stargate_id: $destination_stargate_id,
+            destination_system_id: $destination_system_id,
+            name: $name,
+            x: $x,
+            y: $y,
+            z: $z,
+            stargate_id: $stargate_id,
+            system_id: $system_id,
+            type_id: $type_id
+        })";
+
+    graph.run(query(&create_statement)
+        .param("destination_stargate_id", stargate.destination_stargate_id)
+        .param("destination_system_id", stargate.destination_system_id)
+        .param("name", stargate.name.clone())
+        .param("x", stargate.x)
+        .param("y", stargate.y)
+        .param("z", stargate.z)
+        .param("stargate_id", stargate.stargate_id)
+        .param("system_id", stargate.system_id)
+        .param("type_id", stargate.type_id))
+        .await?;
+
+    Ok(())
+}
+
+pub(crate) async fn save_stargate_relation(graph: Arc<Graph>, stargate: &Stargate) -> Result<(), neo4rs::Error> {
+    let system_has_stargate = "
+        MATCH (s:System {system_id: $system_id})
+        MATCH (sg:Stargate {stargate_id: $stargate_id})
+        CREATE (s)-[:HAS]->(sg)";
+
+    graph.run(query(system_has_stargate)
+        .param("system_id", stargate.system_id)
+        .param("stargate_id", stargate.stargate_id))
+        .await?;
+
+    let stargate_connects_to = "\
+        MATCH (s:System {system_id: $system_id})\
+        MATCH (sg:Stargate {stargate_id: $stargate_id})\
+        CREATE (sg)-[:CONNECTS_TO]->(s)";
+
+    graph.run(query(stargate_connects_to)
+        .param("system_id", stargate.destination_system_id)
+        .param("stargate_id", stargate.stargate_id))
+        .await
 }
 
 #[cfg(test)]

@@ -4,8 +4,8 @@ use neo4rs::Graph;
 use reqwest::Client;
 use thiserror::Error;
 
-use crate::database::{get_graph_client, save_system, System, system_id_exists};
-use crate::esi::{get_system_details, get_system_ids, SystemEsiResponse};
+use crate::database::{get_graph_client, get_system, save_stargate, save_stargate_relation, save_system, Stargate, System, system_id_exists};
+use crate::esi::{get_stargate, get_system_details, get_system_ids, StargateEsiResponse, SystemEsiResponse};
 
 mod database;
 mod esi;
@@ -89,12 +89,54 @@ async fn pull_system(
     Ok(())
 }
 
+impl From<StargateEsiResponse> for Stargate {
+    fn from(value: StargateEsiResponse) -> Self {
+        Self {
+            destination_stargate_id: value.destination.stargate_id,
+            destination_system_id: value.destination.system_id,
+            name: value.name,
+            x: value.position.x,
+            y: value.position.y,
+            z: value.position.z,
+            stargate_id: value.stargate_id,
+            system_id: value.system_id,
+            type_id: value.type_id,
+        }
+    }
+}
+
+async fn relate_system_stargates(client: Client, graph: Arc<Graph>, system_id: i64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let system = get_system(graph.clone(), system_id).await;
+
+    let system_stargate_relationships: Vec<_> = system.unwrap().unwrap().stargates
+        .unwrap()
+        .iter()
+        .map(|&stargate_id| tokio::spawn(relate_stargate(client.clone(), graph.clone(), stargate_id)))
+        .collect();
+
+    futures::future::try_join_all(system_stargate_relationships).await?;
+
+    Ok(())
+}
+
+async fn relate_stargate(client: Client, graph: Arc<Graph>, stargate_id: i64) -> Result<(), ReplicationError> {
+    let stargate_response = get_stargate(&client, stargate_id).await?;
+    let stargate = Stargate::from(stargate_response);
+
+    save_stargate(graph.clone(), &stargate).await?;
+
+    save_stargate_relation(graph.clone(), &stargate).await?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use reqwest::Client;
 
     use crate::database::{get_graph_client, save_system, System};
     use crate::esi::{get_stargate, get_system_details};
+    use crate::relate_system_stargates;
 
     #[tokio::test]
     async fn can_save_system_to_database() {
@@ -109,6 +151,21 @@ mod tests {
                 //TODO: Delete the record created
             }
             Err(_) => panic!("Could not save system")
+        }
+    }
+
+    #[tokio::test]
+    async fn should_relate_stargates_to_systems() {
+        let client = Client::new();
+        let graph = get_graph_client().await;
+
+        let system_id = 30000201;
+
+        match relate_system_stargates(client, graph, system_id).await {
+            Ok(_) => {
+                //TODO: Delete the relationship records and stargates
+            }
+            Err(_) => panic!("Could not relate the system's stargates")
         }
     }
 

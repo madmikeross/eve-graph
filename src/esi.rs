@@ -29,7 +29,7 @@ pub(crate) struct Position {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct Stargate {
+pub(crate) struct StargateEsiResponse {
     pub destination: Destination,
     pub name: String,
     pub position: Position,
@@ -40,8 +40,8 @@ pub(crate) struct Stargate {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct Destination {
-    stargate_id: i64,
-    system_id: i64,
+    pub stargate_id: i64,
+    pub system_id: i64,
 }
 
 pub(crate) async fn get_system_details(client: &Client, system_id: i64) -> Result<SystemEsiResponse, reqwest::Error> {
@@ -50,7 +50,7 @@ pub(crate) async fn get_system_details(client: &Client, system_id: i64) -> Resul
     response.json().await
 }
 
-pub(crate) async fn get_stargate(client: &Client, stargate_id: i64) -> Result<Stargate, reqwest::Error> {
+pub(crate) async fn get_stargate(client: &Client, stargate_id: i64) -> Result<StargateEsiResponse, reqwest::Error> {
     let stargate_url = format!("https://esi.evetech.net/latest/universe/stargates/{}", stargate_id);
     let response = client.get(&stargate_url).send().await?;
     response.json().await
