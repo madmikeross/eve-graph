@@ -3,10 +3,12 @@ use std::sync::Arc;
 use neo4rs::Graph;
 use reqwest::Client;
 
-use crate::database::{get_graph_client, get_system_details, get_system_ids, save_system, system_id_exists};
+use crate::database::{get_graph_client, save_system, system_id_exists};
+use crate::esi::{get_system_details, get_system_ids};
 
 mod models;
 mod database;
+mod esi;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>{

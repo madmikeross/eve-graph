@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use neo4rs::{Graph, query};
-use reqwest::Client;
+use crate::esi::SystemEsiResponse;
 
-use crate::models::{Stargate, System};
+use crate::models::{System};
 
 pub(crate) async fn get_graph_client() -> Arc<Graph> {
     let uri = "bolt://localhost:7687";
@@ -13,23 +13,25 @@ pub(crate) async fn get_graph_client() -> Arc<Graph> {
     Arc::new(Graph::new(uri, user, pass).await.unwrap())
 }
 
-pub(crate) async fn get_system_details(client: &Client, system_id: i64) -> Result<System, reqwest::Error> {
-    let system_detail_url = format!("https://esi.evetech.net/latest/universe/systems/{}", system_id);
-    let response = client.get(&system_detail_url).send().await?;
-    response.json().await
+impl From<SystemEsiResponse> for System {
+    fn from(s: SystemEsiResponse) -> Self {
+        Self {
+            constellation_id: s.constellation_id,
+            name: s.name,
+            planets: s.planets.map(|planets| planets.into_iter().map(|planet| planet.planet_id).collect()),
+            x: s.position.x,
+            y: s.position.y,
+            z: s.position.z,
+            security_class: s.security_class,
+            security_status: s.security_status,
+            star_id: s.star_id,
+            stargates: s.stargates,
+            system_id: s.system_id,
+        }
+    }
 }
 
-pub(crate) async fn get_stargate(client: &Client, stargate_id: i64) -> Result<Stargate, reqwest::Error> {
-    let stargate_url = format!("https://esi.evetech.net/latest/universe/stargates/{}", stargate_id);
-    let response = client.get(&stargate_url).send().await?;
-    response.json().await
-}
 
-pub(crate) async fn get_system_ids(client: &Client) -> Result<Vec<i64>, reqwest::Error> {
-    let systems_url = "https://esi.evetech.net/latest/universe/systems/";
-    let response = client.get(systems_url).send().await?;
-    response.json().await
-}
 
 pub(crate) async fn system_id_exists(graph: &Graph, system_id: i64) -> Result<bool, neo4rs::Error> {
     let system_exists = "MATCH (s:System {system_id: $system_id}) RETURN COUNT(s) as count LIMIT 1";
@@ -72,9 +74,9 @@ pub(crate) async fn save_system(graph: &Arc<Graph>, system: &System) -> Result<(
         .param("security_status", system.security_status)
         .param("star_id", star_id)
         .param("security_class", security_class_param)
-        .param("x", system.position.x)
-        .param("y", system.position.y)
-        .param("z", system.position.z)
+        .param("x", system.x)
+        .param("y", system.y)
+        .param("z", system.z)
         .param("planets", planets_json)
         .param("stargates", stargates))
         .await?;
@@ -85,7 +87,25 @@ pub(crate) async fn save_system(graph: &Arc<Graph>, system: &System) -> Result<(
 #[cfg(test)]
 mod tests {
     use reqwest::Client;
-    use crate::database::get_stargate;
+
+    use crate::database::{get_graph_client, save_system};
+    use crate::esi::{get_stargate, get_system_details};
+
+    #[tokio::test]
+    async fn can_save_system_to_database() {
+        let client = Client::new();
+        let graph = get_graph_client().await;
+
+        let system_id = 30000201;
+        let system = get_system_details(&client, system_id).await.unwrap();
+
+        match save_system(&graph, &system).await {
+            Ok(_) => {
+                //TODO: Delete the record created
+            }
+            Err(_) => panic!("Could not save system")
+        }
+    }
 
     #[tokio::test]
     async fn can_retrieve_and_parse_stargate() {
