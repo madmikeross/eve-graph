@@ -13,3 +13,4 @@ neo4rs = "0.6.2"
 tokio = { version = "1", features = ["full"] }
 futures = "0.3.29"
 uuid = "1.6.0"
+thiserror = "1.0.50"

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use neo4rs::Graph;
 use reqwest::Client;
+use thiserror::Error;
 
 use crate::database::{get_graph_client, save_system, System, system_id_exists};
 use crate::esi::{get_system_details, get_system_ids, SystemEsiResponse};
@@ -30,7 +31,7 @@ async fn pull_system_if_missing(
     client: Client,
     graph: Arc<Graph>,
     system_id: i64,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), ReplicationError> {
     if !system_id_exists(&graph, system_id).await? {
         pull_system(client, graph, system_id).await?;
     } else {
@@ -58,11 +59,19 @@ impl From<SystemEsiResponse> for System {
     }
 }
 
+#[derive(Error, Debug)]
+enum ReplicationError {
+    #[error("failed to retrieve data from the source")]
+    SourceError(#[from] reqwest::Error),
+    #[error("failed to persist data to the target")]
+    TargetError(#[from] neo4rs::Error),
+}
+
 async fn pull_system(
     client: Client,
     graph: Arc<Graph>,
     system_id: i64,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), ReplicationError> {
     match get_system_details(&client, system_id).await {
         Ok(system_response) => {
             let system = System::from(system_response);
