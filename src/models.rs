@@ -21,6 +21,22 @@ pub(crate) struct Planet {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct Stargate {
+    pub destination: Destination,
+    pub name: String,
+    pub position: Position,
+    pub stargate_id: i64,
+    pub system_id: i64,
+    pub type_id: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct Destination {
+    stargate_id: i64,
+    system_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct Position {
     pub x: f64,
     pub y: f64,

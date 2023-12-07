@@ -4,7 +4,7 @@ use futures::StreamExt;
 use neo4rs::{Graph, query};
 use reqwest::Client;
 
-use crate::models::System;
+use crate::models::{Stargate, System};
 
 pub(crate) async fn get_graph_client() -> Arc<Graph> {
     let uri = "bolt://localhost:7687";
@@ -16,6 +16,12 @@ pub(crate) async fn get_graph_client() -> Arc<Graph> {
 pub(crate) async fn get_system_details(client: &Client, system_id: i64) -> Result<System, reqwest::Error> {
     let system_detail_url = format!("https://esi.evetech.net/latest/universe/systems/{}", system_id);
     let response = client.get(&system_detail_url).send().await?;
+    response.json().await
+}
+
+pub(crate) async fn get_stargate(client: &Client, stargate_id: i64) -> Result<Stargate, reqwest::Error> {
+    let stargate_url = format!("https://esi.evetech.net/latest/universe/stargates/{}", stargate_id);
+    let response = client.get(&stargate_url).send().await?;
     response.json().await
 }
 
@@ -74,4 +80,24 @@ pub(crate) async fn save_system(graph: &Arc<Graph>, system: &System) -> Result<(
         .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use reqwest::Client;
+    use crate::database::get_stargate;
+
+    #[tokio::test]
+    async fn can_retrieve_and_parse_stargate() {
+        let client = Client::new();
+        let stargate_id = 50011905;
+        match get_stargate(&client, stargate_id).await {
+            Ok(stargate) => {
+                assert_eq!(stargate.stargate_id, stargate_id);
+            }
+            Err(err) => {
+                panic!("Error in test: {}", err);
+            }
+        }
+    }
 }
