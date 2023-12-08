@@ -4,8 +4,8 @@ use neo4rs::Graph;
 use reqwest::Client;
 use thiserror::Error;
 
-use crate::database::{get_graph_client, get_system, save_stargate, save_stargate_relation, save_system, Stargate, System, system_id_exists};
-use crate::esi::{get_stargate, get_system_details, get_system_ids, StargateEsiResponse, SystemEsiResponse};
+use crate::database::{get_all_stargate_ids, get_all_system_ids, get_graph_client, get_stargate, get_system, save_stargate, save_stargate_relation, save_system, Stargate, stargate_id_exists, System, system_id_exists};
+use crate::esi::{get_stargate_details, get_system_details, get_system_ids, StargateEsiResponse, SystemEsiResponse};
 
 mod database;
 mod esi;
@@ -23,6 +23,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>{
         .collect();
 
     futures::future::try_join_all(system_pulls).await?;
+
+    let saved_system_ids = get_all_system_ids(graph.clone()).await?;
+
+    let stargate_pulls: Vec<_> = saved_system_ids
+        .iter()
+        .map(|&system_id| tokio::spawn(pull_system_stargates(client.clone(), graph.clone(), system_id)))
+        .collect();
+
+    futures::future::try_join_all(stargate_pulls).await?;
+
+    let stargate_ids = get_all_stargate_ids(graph.clone()).await?;
+    let stargate_relationships: Vec<_> = stargate_ids
+        .iter()
+        .map(|&stargate_id| tokio::spawn(relate_stargate(client.clone(), graph.clone(), stargate_id)))
+        .collect();
+
+    futures::future::try_join_all(stargate_relationships).await?;
+
+    Ok(())
+}
+
+pub async fn find_secure_path(graph: &Graph, start_system: &str, end_system: &str) -> Result<(), Neo4jError> {
+    let query_statement = format!(
+        "MATCH path = (start:System {{name: '{}'}})-[:CONNECTS_TO*]->(end:System {{name: '{}'}})
+         WHERE ALL(node IN nodes(path) WHERE node.security_status > 0.5)
+         RETURN path",
+        start_system, end_system
+    );
+
+    let result = graph.run(query(&query_statement)).await?;
+    // Process the result as needed
 
     Ok(())
 }
@@ -105,6 +136,33 @@ impl From<StargateEsiResponse> for Stargate {
     }
 }
 
+async fn pull_system_stargates(client: Client, graph: Arc<Graph>, system_id: i64) -> Result<(), ReplicationError> {
+    match get_system(graph.clone(), system_id).await {
+        Ok(system) => {
+            match system {
+                Some(system) => {
+                    let stargate_pulls: Vec<_> = system.stargates.unwrap()
+                        .iter()
+                        .map(|&stargate_id| pull_stargate_if_missing(client.clone(), graph.clone(), stargate_id))
+                        .collect();
+
+                    futures::future::try_join_all(stargate_pulls).await?;
+
+                    Ok(())
+                }
+                None => {
+                    println!("Could not retrieve system {} from db", system_id);
+                    Ok(())
+                }
+            }
+        }
+        Err(_) => {
+            println!("Error calling get system {}", system_id);
+            Ok(())
+        }
+    }
+}
+
 async fn relate_system_stargates(client: Client, graph: Arc<Graph>, system_id: i64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let system = get_system(graph.clone(), system_id).await;
 
@@ -119,13 +177,47 @@ async fn relate_system_stargates(client: Client, graph: Arc<Graph>, system_id: i
     Ok(())
 }
 
-async fn relate_stargate(client: Client, graph: Arc<Graph>, stargate_id: i64) -> Result<(), ReplicationError> {
-    let stargate_response = get_stargate(&client, stargate_id).await?;
+async fn pull_stargate_if_missing(client: Client, graph: Arc<Graph>, stargate_id: i64) -> Result<(), ReplicationError> {
+    if !stargate_id_exists(graph.clone(), stargate_id).await? {
+        pull_stargate(client, graph, stargate_id).await?;
+    } else {
+        println!("Stargate {} already exists in the database.", stargate_id);
+    }
+
+    Ok(())
+}
+
+async fn pull_stargate(client: Client, graph: Arc<Graph>, stargate_id: i64) -> Result<(), ReplicationError> {
+    let stargate_response = get_stargate_details(&client, stargate_id).await?;
     let stargate = Stargate::from(stargate_response);
 
     save_stargate(graph.clone(), &stargate).await?;
 
-    save_stargate_relation(graph.clone(), &stargate).await?;
+    Ok(())
+}
+
+async fn relate_stargate(client: Client, graph: Arc<Graph>, stargate_id: i64) -> Result<(), ReplicationError> {
+    match get_stargate(graph.clone(), stargate_id).await {
+        Ok(stargate) => {
+            match stargate {
+                Some(stargate) => {
+                    match save_stargate_relation(graph.clone(), &stargate).await {
+                        Ok(_) => {}
+                        Err(_) => {
+                            println!("Error saving stargate relations {}", stargate_id);
+                        }
+                    }
+                }
+                None => {
+                    println!("Stargate not found in database {}", stargate_id);
+                }
+            }
+        }
+        Err(_) => {
+            println!("Error calling db to get stargate {}", stargate_id);
+        }
+    }
+
 
     Ok(())
 }
@@ -134,9 +226,9 @@ async fn relate_stargate(client: Client, graph: Arc<Graph>, stargate_id: i64) ->
 mod tests {
     use reqwest::Client;
 
+    use crate::{pull_system_stargates, relate_system_stargates};
     use crate::database::{get_graph_client, save_system, System};
-    use crate::esi::{get_stargate, get_system_details};
-    use crate::relate_system_stargates;
+    use crate::esi::{get_stargate_details, get_system_details};
 
     #[tokio::test]
     async fn can_save_system_to_database() {
@@ -155,11 +247,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn should_pull_system_stargates() {
+        let client = Client::new();
+        let graph = get_graph_client().await;
+
+        let system_id = 30000193;
+        match pull_system_stargates(client.clone(), graph.clone(), system_id).await {
+            Ok(_) => {},
+            Err(_) => {
+                println!("Failed to pull system stargates");
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn should_relate_stargates_to_systems() {
         let client = Client::new();
         let graph = get_graph_client().await;
 
-        let system_id = 30000201;
+        let system_id = 30000193;
 
         match relate_system_stargates(client, graph, system_id).await {
             Ok(_) => {
@@ -173,7 +279,7 @@ mod tests {
     async fn can_retrieve_and_parse_stargate() {
         let client = Client::new();
         let stargate_id = 50011905;
-        match get_stargate(&client, stargate_id).await {
+        match get_stargate_details(&client, stargate_id).await {
             Ok(stargate) => {
                 assert_eq!(stargate.stargate_id, stargate_id);
             }

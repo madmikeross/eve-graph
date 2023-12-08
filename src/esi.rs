@@ -50,7 +50,7 @@ pub(crate) async fn get_system_details(client: &Client, system_id: i64) -> Resul
     response.json().await
 }
 
-pub(crate) async fn get_stargate(client: &Client, stargate_id: i64) -> Result<StargateEsiResponse, reqwest::Error> {
+pub(crate) async fn get_stargate_details(client: &Client, stargate_id: i64) -> Result<StargateEsiResponse, reqwest::Error> {
     let stargate_url = format!("https://esi.evetech.net/latest/universe/stargates/{}", stargate_id);
     let response = client.get(&stargate_url).send().await?;
     response.json().await

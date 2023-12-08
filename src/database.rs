@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use neo4rs::{Graph, query};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 
 pub(crate) async fn get_graph_client() -> Arc<Graph> {
@@ -21,7 +21,17 @@ pub(crate) async fn system_id_exists(graph: &Graph, system_id: i64) -> Result<bo
     }
 }
 
-#[derive(Debug, Deserialize)]
+pub(crate) async fn stargate_id_exists(graph: Arc<Graph>, stargate_id: i64) -> Result<bool, neo4rs::Error> {
+    let stargate_exists = "MATCH (s:Stargate {stargate_id: $stargate_id}) RETURN COUNT(s) as count LIMIT 1";
+    let mut result = graph.execute(query(stargate_exists).param("stargate_id", stargate_id)).await?;
+
+    match result.next().await? {
+        Some(row) => Ok(row.get::<i64>("count").map_or(false, |count| count > 0)),
+        None => Ok(false)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct System {
     pub constellation_id: Option<i64>,
     pub name: Option<String>,
@@ -75,8 +85,19 @@ pub(crate) async fn get_system(graph: Arc<Graph>, system_id: i64) -> Result<Opti
 
     match result.next().await? {
         Some(row) => {
-            let system: System = row.get("system").unwrap();
-            Ok(Some(system))
+            Ok(row.get("system").ok())
+        }
+        None => Ok(None),
+    }
+}
+
+pub(crate) async fn get_stargate(graph: Arc<Graph>, stargate_id: i64) -> Result<Option<Stargate>, neo4rs::Error> {
+    let get_stargate_statement = "MATCH (stargate:Stargate {stargate_id: $stargate_id}) RETURN stargate LIMIT 1";
+    let mut result = graph.execute(query(get_stargate_statement).param("stargate_id", stargate_id)).await?;
+
+    match result.next().await? {
+        Some(row) => {
+            Ok(row.get("stargate").ok())
         }
         None => Ok(None),
     }
@@ -97,6 +118,21 @@ pub async fn get_all_system_ids(graph: Arc<Graph>) -> Result<Vec<i64>, neo4rs::E
     Ok(system_ids)
 }
 
+pub async fn get_all_stargate_ids(graph: Arc<Graph>) -> Result<Vec<i64>, neo4rs::Error> {
+    let get_all_stargate_ids_statement = "MATCH (s:Stargate) RETURN s.stargate_id AS stargate_id";
+
+    let mut result = graph.execute(query(get_all_stargate_ids_statement)).await?;
+    let mut stargate_ids = Vec::new();
+
+    while let Some(row) = result.next().await? {
+        if let Ok(stargate_id) = row.get("stargate_id") {
+            stargate_ids.push(stargate_id);
+        }
+    }
+
+    Ok(stargate_ids)
+}
+#[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct Stargate {
     pub destination_stargate_id: i64,
     pub destination_system_id: i64,
@@ -166,7 +202,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_read_system_from_database() {
-        let system_id = 30000201;
+        let system_id = 30001451;
         let system = get_system(get_graph_client().await, system_id).await;
         assert_eq!(system.unwrap().unwrap().system_id, system_id)
     }
