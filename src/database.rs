@@ -82,6 +82,21 @@ pub(crate) async fn get_system(graph: Arc<Graph>, system_id: i64) -> Result<Opti
     }
 }
 
+pub async fn get_all_system_ids(graph: Arc<Graph>) -> Result<Vec<i64>, neo4rs::Error> {
+    let get_all_system_ids_statement = "MATCH (s:System) RETURN s.system_id AS system_id";
+
+    let mut result = graph.execute(query(get_all_system_ids_statement)).await?;
+    let mut system_ids = Vec::new();
+
+    while let Some(row) = result.next().await? {
+        if let Ok(system_id) = row.get("system_id") {
+            system_ids.push(system_id);
+        }
+    }
+
+    Ok(system_ids)
+}
+
 pub(crate) struct Stargate {
     pub destination_stargate_id: i64,
     pub destination_system_id: i64,
@@ -147,12 +162,19 @@ pub(crate) async fn save_stargate_relation(graph: Arc<Graph>, stargate: &Stargat
 
 #[cfg(test)]
 mod tests {
-    use crate::database::{get_graph_client, get_system};
+    use crate::database::{get_all_system_ids, get_graph_client, get_system};
 
     #[tokio::test]
     async fn should_read_system_from_database() {
         let system_id = 30000201;
         let system = get_system(get_graph_client().await, system_id).await;
         assert_eq!(system.unwrap().unwrap().system_id, system_id)
+    }
+
+    #[tokio::test]
+    async fn should_get_all_saved_system_ids() {
+        let system_ids = get_all_system_ids(get_graph_client().await).await;
+
+        assert_eq!(system_ids.unwrap().len(), 8436)
     }
 }
