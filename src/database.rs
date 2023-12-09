@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use neo4rs::{Error, Graph, query};
 use serde::{Deserialize, Serialize};
+use std::error;
 use crate::evescout::EveScoutSignature;
 
 
@@ -177,26 +178,29 @@ pub(crate) async fn save_stargate(graph: Arc<Graph>, stargate: &Stargate) -> Res
     Ok(())
 }
 
-pub(crate) async fn save_stargate_relation(graph: Arc<Graph>, stargate: &Stargate) -> Result<(), Error> {
-    let system_has_stargate = "
-        MATCH (s:System {system_id: $system_id})
-        MATCH (sg:Stargate {stargate_id: $stargate_id})
-        CREATE (s)-[:HAS]->(sg)";
+pub(crate) async fn relate_stargate(graph: Arc<Graph>, stargate_id: i64) -> Result<(), Error> {
+    match get_stargate(graph.clone(), stargate_id).await {
+        Ok(stargate) => {
+            match stargate {
+                Some(stargate) => {
+                    match create_system_jump(graph, stargate.system_id, stargate.destination_system_id).await {
+                        Ok(_) => {}
+                        Err(_) => {
+                            println!("Error saving stargate relations {}", stargate_id);
+                        }
+                    }
+                }
+                None => {
+                    println!("Stargate not found in database {}", stargate_id);
+                }
+            }
+        }
+        Err(_) => {
+            println!("Error calling db to get stargate {}", stargate_id);
+        }
+    }
 
-    graph.run(query(system_has_stargate)
-        .param("system_id", stargate.system_id)
-        .param("stargate_id", stargate.stargate_id))
-        .await?;
-
-    let stargate_connects_to = "\
-        MATCH (s:System {system_id: $system_id})\
-        MATCH (sg:Stargate {stargate_id: $stargate_id})\
-        CREATE (sg)-[:CONNECTS_TO]->(s)";
-
-    graph.run(query(stargate_connects_to)
-        .param("system_id", stargate.destination_system_id)
-        .param("stargate_id", stargate.stargate_id))
-        .await
+    Ok(())
 }
 
 pub(crate) async fn save_wormhole(graph: Arc<Graph>, signature: EveScoutSignature) -> Result<(), Error> {
@@ -243,6 +247,35 @@ pub(crate) async fn drop_system_connections(graph: &Arc<Graph>, system_name: &st
     Ok(())
 }
 
+
+pub(crate) async fn relate_all_systems(graph: Arc<Graph>) -> Result<(), Box<dyn error::Error + Send + Sync>> {
+    let stargate_ids = get_all_stargate_ids(graph.clone()).await?;
+    let stargate_relationships: Vec<_> = stargate_ids
+        .iter()
+        .map(|&stargate_id| tokio::spawn(relate_stargate(graph.clone(), stargate_id)))
+        .collect();
+    futures::future::try_join_all(stargate_relationships).await?;
+    Ok(())
+}
+
+pub async fn rebuild_system_jump_graph(graph: Arc<Graph>) -> Result<(), neo4rs::Error> {
+    drop_system_jump_graph(&graph).await?;
+    build_system_jump_graph(graph).await
+}
+
+pub async fn relate_system_stargates(graph: Arc<Graph>, system_id: i64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let system = get_system(graph.clone(), system_id).await;
+
+    let system_stargate_relationships: Vec<_> = system.unwrap().unwrap().stargates
+        .unwrap()
+        .iter()
+        .map(|&stargate_id| tokio::spawn(relate_stargate(graph.clone(), stargate_id)))
+        .collect();
+
+    futures::future::try_join_all(system_stargate_relationships).await?;
+
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {

@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::sync::Arc;
 
 use neo4rs::Graph;
@@ -15,39 +16,23 @@ mod evescout;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>{
     let client = Client::new();
-    let system_ids = get_system_ids(&client).await.unwrap();
-
     let graph = get_graph_client().await;
 
-    let system_pulls: Vec<_> = system_ids
-        .iter()
-        .map(|&system_id| tokio::spawn(pull_system_if_missing(client.clone(), graph.clone(), system_id)))
-        .collect();
+    pull_all_systems(&client, graph.clone()).await?;
+    pull_all_stargates(&client, graph.clone()).await?;
 
-    futures::future::try_join_all(system_pulls).await?;
+    relate_all_systems(graph.clone()).await?;
 
-    let saved_system_ids = get_all_system_ids(graph.clone()).await?;
+    refresh_eve_scout_system_relations(client, graph.clone()).await?;
 
-    let stargate_pulls: Vec<_> = saved_system_ids
-        .iter()
-        .map(|&system_id| tokio::spawn(pull_system_stargates(client.clone(), graph.clone(), system_id)))
-        .collect();
+    rebuild_system_jump_graph(graph).await?;
 
-    futures::future::try_join_all(stargate_pulls).await?;
+    Ok(())
+}
 
-    // Connect systems via relationships from stargates
-    let stargate_ids = get_all_stargate_ids(graph.clone()).await?;
-    let stargate_relationships: Vec<_> = stargate_ids
-        .iter()
-        .map(|&stargate_id| tokio::spawn(relate_stargate(graph.clone(), stargate_id)))
-        .collect();
-
-    futures::future::try_join_all(stargate_relationships).await?;
-
-    // Get public signatures from eve scout to link Thera and Turnur systems
+async fn refresh_eve_scout_system_relations(client: Client, graph: Arc<Graph>) -> Result<(), Box<dyn Error + Send + Sync>> {
     drop_system_connections(&graph, "Thera").await?;
     drop_system_connections(&graph, "Turnur").await?;
-    drop_system_jump_graph(&graph).await?;
 
     let signatures = get_public_signatures(client.clone()).await?;
     let wormhole_saves: Vec<_> = signatures
@@ -57,17 +42,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>{
         .collect();
 
     futures::future::try_join_all(wormhole_saves).await?;
-
-    build_system_jump_graph(graph).await?;
-
     Ok(())
 }
 
-async fn pull_system_if_missing(
-    client: Client,
-    graph: Arc<Graph>,
-    system_id: i64,
-) -> Result<(), ReplicationError> {
+async fn pull_all_stargates(client: &Client, graph: Arc<Graph>) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let saved_system_ids = get_all_system_ids(graph.clone()).await?;
+    let stargate_pulls: Vec<_> = saved_system_ids
+        .iter()
+        .map(|&system_id| tokio::spawn(pull_system_stargates(client.clone(), graph.clone(), system_id)))
+        .collect();
+    futures::future::try_join_all(stargate_pulls).await?;
+    Ok(())
+}
+
+async fn pull_all_systems(client: &Client, graph: Arc<Graph>) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let system_ids = get_system_ids(&client).await.unwrap();
+    let system_pulls: Vec<_> = system_ids
+        .iter()
+        .map(|&system_id| tokio::spawn(pull_system_if_missing(client.clone(), graph.clone(), system_id)))
+        .collect();
+    futures::future::try_join_all(system_pulls).await?;
+    Ok(())
+}
+
+async fn pull_system_if_missing(client: Client, graph: Arc<Graph>, system_id: i64, ) -> Result<(), ReplicationError> {
     if !system_id_exists(&graph, system_id).await? {
         pull_system(client, graph, system_id).await?;
     } else {
@@ -103,11 +101,7 @@ enum ReplicationError {
     TargetError(#[from] neo4rs::Error),
 }
 
-async fn pull_system(
-    client: Client,
-    graph: Arc<Graph>,
-    system_id: i64,
-) -> Result<(), ReplicationError> {
+async fn pull_system(client: Client, graph: Arc<Graph>, system_id: i64, ) -> Result<(), ReplicationError> {
     match get_system_details(&client, system_id).await {
         Ok(system_response) => {
             let system = System::from(system_response);
@@ -150,9 +144,7 @@ async fn pull_system_stargates(client: Client, graph: Arc<Graph>, system_id: i64
                         .iter()
                         .map(|&stargate_id| pull_stargate_if_missing(client.clone(), graph.clone(), stargate_id))
                         .collect();
-
                     futures::future::try_join_all(stargate_pulls).await?;
-
                     Ok(())
                 }
                 None => {
@@ -166,20 +158,6 @@ async fn pull_system_stargates(client: Client, graph: Arc<Graph>, system_id: i64
             Ok(())
         }
     }
-}
-
-async fn relate_system_stargates(graph: Arc<Graph>, system_id: i64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let system = get_system(graph.clone(), system_id).await;
-
-    let system_stargate_relationships: Vec<_> = system.unwrap().unwrap().stargates
-        .unwrap()
-        .iter()
-        .map(|&stargate_id| tokio::spawn(relate_stargate(graph.clone(), stargate_id)))
-        .collect();
-
-    futures::future::try_join_all(system_stargate_relationships).await?;
-
-    Ok(())
 }
 
 async fn pull_stargate_if_missing(client: Client, graph: Arc<Graph>, stargate_id: i64) -> Result<(), ReplicationError> {
@@ -201,38 +179,12 @@ async fn pull_stargate(client: Client, graph: Arc<Graph>, stargate_id: i64) -> R
     Ok(())
 }
 
-async fn relate_stargate(graph: Arc<Graph>, stargate_id: i64) -> Result<(), ReplicationError> {
-    match get_stargate(graph.clone(), stargate_id).await {
-        Ok(stargate) => {
-            match stargate {
-                Some(stargate) => {
-                    match create_system_jump(graph, stargate.system_id, stargate.destination_system_id).await {
-                        Ok(_) => {}
-                        Err(_) => {
-                            println!("Error saving stargate relations {}", stargate_id);
-                        }
-                    }
-                }
-                None => {
-                    println!("Stargate not found in database {}", stargate_id);
-                }
-            }
-        }
-        Err(_) => {
-            println!("Error calling db to get stargate {}", stargate_id);
-        }
-    }
-
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use reqwest::Client;
 
-    use crate::{pull_system_stargates, relate_system_stargates};
-    use crate::database::{get_graph_client, save_system, System};
+    use crate::pull_system_stargates;
+    use crate::database::{get_graph_client, relate_system_stargates, save_system, System};
     use crate::esi::{get_stargate_details, get_system_details};
 
     #[tokio::test]
