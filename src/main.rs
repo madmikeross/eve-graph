@@ -1,9 +1,14 @@
+use std::convert::Infallible;
 use std::error::Error;
 use std::sync::Arc;
 
 use neo4rs::Graph;
+use reject::Reject;
 use reqwest::Client;
 use thiserror::Error;
+use warp::{Filter, reject, Rejection, Reply, reply};
+use warp::hyper::StatusCode;
+use warp::reply::json;
 
 use crate::database::*;
 use crate::esi::{get_stargate_details, get_system_details, get_system_ids, StargateEsiResponse, SystemEsiResponse};
@@ -14,20 +19,47 @@ mod esi;
 mod evescout;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>{
+async fn main() {
     let client = Client::new();
     let graph = get_graph_client().await;
 
-    pull_all_systems(&client, graph.clone()).await?;
-    pull_all_stargates(&client, graph.clone()).await?;
+    // Build and/or refresh the database
+    // pull_all_systems(&client, graph.clone()).await?;
+    // pull_all_stargates(&client, graph.clone()).await?;
+    // relate_all_systems(graph.clone()).await?;
+    // refresh_eve_scout_system_relations(client, graph.clone()).await?;
+    // rebuild_system_jump_graph(graph).await?;
 
-    relate_all_systems(graph.clone()).await?;
+    let route_path = warp::path!("route" / String / "to" / String);
+    let route_routes = route_path
+        .and(warp::get())
+        .and(with_graph(graph.clone()))
+        .and_then(route_handler);
+    let service_routes = route_routes
+        .recover(handle_rejection);
 
-    refresh_eve_scout_system_relations(client, graph.clone()).await?;
+    warp::serve(service_routes).run(([127, 0, 0, 1], 8008)).await;
+}
 
-    rebuild_system_jump_graph(graph).await?;
+fn with_graph(graph: Arc<Graph>) -> impl Filter<Extract = (Arc<Graph>,), Error = Infallible> + Clone {
+    warp::any().map(move || graph.clone())
+}
 
-    Ok(())
+async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
+    if err.is_not_found() {
+        Ok(reply::with_status("NOT_FOUND", StatusCode::NOT_FOUND))
+    } else if let Some(e) = err.find::<neo4rs::Error>() {
+        Ok(reply::with_status("INTERNAL_SERVER_ERROR", StatusCode::INTERNAL_SERVER_ERROR))
+    } else {
+        eprintln!("unhandled rejection: {:?}", err);
+        Ok(reply::with_status("INTERNAL_SERVER_ERROR", StatusCode::INTERNAL_SERVER_ERROR))
+    }
+}
+
+async fn route_handler(from_system_name: String, to_system_name: String, graph: Arc<Graph>) -> Result<impl Reply, Rejection> {
+    let route = find_shortest_route(graph, from_system_name, to_system_name)
+        .await.unwrap().unwrap();
+    Ok(json::<Vec<_>>(&route))
 }
 
 async fn refresh_eve_scout_system_relations(client: Client, graph: Arc<Graph>) -> Result<(), Box<dyn Error + Send + Sync>> {

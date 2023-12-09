@@ -277,6 +277,31 @@ pub async fn relate_system_stargates(graph: Arc<Graph>, system_id: i64) -> Resul
     Ok(())
 }
 
+pub(crate) async fn find_shortest_route(graph: Arc<Graph>, from_system_name: String, to_system_name: String) -> Result<Option<Vec<String>>, Error> {
+    let shortest_path_query = "\
+        MATCH (source:System {name: $from_system_name}), (target:System {name: $to_system_name})
+        CALL gds.shortestPath.dijkstra.stream('system-map', {
+            sourceNode: source,
+            targetNode: target,
+            relationshipWeightProperty: 'cost'
+        })
+        YIELD index, sourceNode, targetNode, totalCost, nodeIds, costs, path
+        RETURN
+            [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
+    ";
+
+    let mut result = graph.execute(query(shortest_path_query)
+        .param("from_system_name", from_system_name)
+        .param("to_system_name", to_system_name)).await?;
+
+    match result.next().await? {
+        Some(row) => {
+            Ok(row.get("nodeNames").ok())
+        }
+        None => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::database::{get_all_system_ids, get_graph_client, get_system};
