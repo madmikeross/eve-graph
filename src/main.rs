@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use neo4rs::Graph;
-use reqwest::{Client, Error};
+use reqwest::Client;
 use thiserror::Error;
 
-use crate::database::{get_all_stargate_ids, get_all_system_ids, get_graph_client, get_stargate, get_system, save_stargate, save_stargate_relation, save_system, save_system_connection, save_wormhole, Stargate, stargate_id_exists, System, system_id_exists};
+use crate::database::*;
 use crate::esi::{get_stargate_details, get_system_details, get_system_ids, StargateEsiResponse, SystemEsiResponse};
-use crate::evescout::{EveScoutSignature, get_public_signatures};
+use crate::evescout::get_public_signatures;
 
 mod database;
 mod esi;
@@ -39,12 +39,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>{
     let stargate_ids = get_all_stargate_ids(graph.clone()).await?;
     let stargate_relationships: Vec<_> = stargate_ids
         .iter()
-        .map(|&stargate_id| tokio::spawn(relate_stargate(client.clone(), graph.clone(), stargate_id)))
+        .map(|&stargate_id| tokio::spawn(relate_stargate(graph.clone(), stargate_id)))
         .collect();
 
     futures::future::try_join_all(stargate_relationships).await?;
 
     // Get public signatures from eve scout to link Thera and Turnur systems
+    drop_system_connections(&graph, "Thera").await?;
+    drop_system_connections(&graph, "Turnur").await?;
+    drop_system_jump_graph(&graph).await?;
+
     let signatures = get_public_signatures(client.clone()).await?;
     let wormhole_saves: Vec<_> = signatures
         .iter()
@@ -53,6 +57,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>{
         .collect();
 
     futures::future::try_join_all(wormhole_saves).await?;
+
+    build_system_jump_graph(graph).await?;
 
     Ok(())
 }
@@ -162,13 +168,13 @@ async fn pull_system_stargates(client: Client, graph: Arc<Graph>, system_id: i64
     }
 }
 
-async fn relate_system_stargates(client: Client, graph: Arc<Graph>, system_id: i64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn relate_system_stargates(graph: Arc<Graph>, system_id: i64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let system = get_system(graph.clone(), system_id).await;
 
     let system_stargate_relationships: Vec<_> = system.unwrap().unwrap().stargates
         .unwrap()
         .iter()
-        .map(|&stargate_id| tokio::spawn(relate_stargate(client.clone(), graph.clone(), stargate_id)))
+        .map(|&stargate_id| tokio::spawn(relate_stargate(graph.clone(), stargate_id)))
         .collect();
 
     futures::future::try_join_all(system_stargate_relationships).await?;
@@ -195,20 +201,12 @@ async fn pull_stargate(client: Client, graph: Arc<Graph>, stargate_id: i64) -> R
     Ok(())
 }
 
-// async fn pull_eve_scout_signatures(client: Client, graph: Arc<Graph>) -> Result<(), ReplicationError> {
-//     let signatures = get_public_signatures(client).await?;
-//
-//     save_signatures(graph, signatures).await?;
-//
-//     Ok(())
-// }
-
-async fn relate_stargate(client: Client, graph: Arc<Graph>, stargate_id: i64) -> Result<(), ReplicationError> {
+async fn relate_stargate(graph: Arc<Graph>, stargate_id: i64) -> Result<(), ReplicationError> {
     match get_stargate(graph.clone(), stargate_id).await {
         Ok(stargate) => {
             match stargate {
                 Some(stargate) => {
-                    match save_system_connection(graph.clone(), &stargate).await {
+                    match create_system_jump(graph, stargate.system_id, stargate.destination_system_id).await {
                         Ok(_) => {}
                         Err(_) => {
                             println!("Error saving stargate relations {}", stargate_id);
@@ -274,7 +272,7 @@ mod tests {
 
         let system_id = 30000193;
 
-        match relate_system_stargates(client, graph, system_id).await {
+        match relate_system_stargates(graph, system_id).await {
             Ok(_) => {
                 //TODO: Delete the relationship records and stargates
             }
