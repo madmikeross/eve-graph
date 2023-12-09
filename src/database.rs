@@ -1,7 +1,9 @@
+use std::ops::Deref;
 use std::sync::Arc;
 
 use neo4rs::{Graph, query};
 use serde::{Deserialize, Serialize};
+use crate::evescout::EveScoutSignature;
 
 
 pub(crate) async fn get_graph_client() -> Arc<Graph> {
@@ -132,6 +134,7 @@ pub async fn get_all_stargate_ids(graph: Arc<Graph>) -> Result<Vec<i64>, neo4rs:
 
     Ok(stargate_ids)
 }
+
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct Stargate {
     pub destination_stargate_id: i64,
@@ -174,6 +177,18 @@ pub(crate) async fn save_stargate(graph: Arc<Graph>, stargate: &Stargate) -> Res
     Ok(())
 }
 
+pub(crate) async fn save_system_connection(graph: Arc<Graph>, stargate: &Stargate) -> Result<(), neo4rs::Error> {
+    let system_connects_to = "\
+        MATCH (source:System {system_id: $source_system_id})\
+        MATCH (dest:System {system_id: $dest_system_id})\
+        CREATE (source)-[:JUMP {cost: 1}]->(dest)";
+
+    graph.run(query(system_connects_to)
+        .param("source_system_id", stargate.system_id)
+        .param("dest_system_id", stargate.destination_system_id))
+        .await
+}
+
 pub(crate) async fn save_stargate_relation(graph: Arc<Graph>, stargate: &Stargate) -> Result<(), neo4rs::Error> {
     let system_has_stargate = "
         MATCH (s:System {system_id: $system_id})
@@ -195,6 +210,42 @@ pub(crate) async fn save_stargate_relation(graph: Arc<Graph>, stargate: &Stargat
         .param("stargate_id", stargate.stargate_id))
         .await
 }
+
+pub(crate) async fn save_wormhole(graph: Arc<Graph>, signature: EveScoutSignature) -> Result<(), neo4rs::Error> {
+    let drop_thera_connections = "\
+        MATCH (:System {name: 'Thera'})-[r]-()
+        DELETE r";
+
+    graph.run(query(drop_thera_connections)).await?;
+
+    let drop_turnur_connections = "\
+        MATCH (:System {name: 'Turnur'})-[r]-()
+        DELETE r";
+
+    graph.run(query(drop_turnur_connections)).await?;
+
+    // TODO: Refactor this out into a common method like save system connection above
+    let inbound_connection = "\
+        MATCH (source:System {system_id: $source_system_id})\
+        MATCH (dest:System {system_id: $dest_system_id})\
+        CREATE (source)-[:JUMP {cost: 1}]->(dest)";
+
+    graph.run(query(inbound_connection)
+        .param("source_system_id", signature.in_system_id)
+        .param("dest_system_id", signature.out_system_id))
+        .await?;
+
+    let outbound_connection = "\
+        MATCH (source:System {system_id: $source_system_id})\
+        MATCH (dest:System {system_id: $dest_system_id})\
+        CREATE (source)-[:JUMP {cost: 1}]->(dest)";
+
+    graph.run(query(outbound_connection)
+        .param("source_system_id", signature.out_system_id)
+        .param("dest_system_id", signature.in_system_id))
+        .await
+}
+
 
 #[cfg(test)]
 mod tests {
