@@ -6,6 +6,7 @@ use neo4rs::Graph;
 use reject::Reject;
 use reqwest::Client;
 use thiserror::Error;
+use tokio::task::JoinError;
 use warp::{Filter, reject, Rejection, Reply, reply};
 use warp::hyper::StatusCode;
 use warp::reply::json;
@@ -27,18 +28,28 @@ async fn main() {
     // pull_all_systems(&client, graph.clone()).await?;
     // pull_all_stargates(&client, graph.clone()).await?;
     // relate_all_systems(graph.clone()).await?;
-    // refresh_eve_scout_system_relations(client, graph.clone()).await?;
-    // rebuild_system_jump_graph(graph).await?;
 
-    let route_path = warp::path!("route" / String / "to" / String);
-    let route_routes = route_path
+    let wormholes = warp::path!("wormholes" / "refresh");
+    let wormholes_routes = wormholes
+        .and(warp::post())
+        .and(with_client(client.clone()))
+        .and(with_graph(graph.clone()))
+        .and_then(wormholes_handler);
+
+    let routes = warp::path!("routes" / String / "to" / String);
+    let routes_routes = routes
         .and(warp::get())
         .and(with_graph(graph.clone()))
-        .and_then(route_handler);
-    let service_routes = route_routes
+        .and_then(routes_handler);
+    let service_routes = routes_routes
+        .or(wormholes_routes)
         .recover(handle_rejection);
 
     warp::serve(service_routes).run(([127, 0, 0, 1], 8008)).await;
+}
+
+fn with_client(client: Client) -> impl Filter<Extract = (Client,), Error = Infallible> + Clone {
+    warp::any().map(move || client.clone())
 }
 
 fn with_graph(graph: Arc<Graph>) -> impl Filter<Extract = (Arc<Graph>,), Error = Infallible> + Clone {
@@ -47,8 +58,14 @@ fn with_graph(graph: Arc<Graph>) -> impl Filter<Extract = (Arc<Graph>,), Error =
 
 async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
     if err.is_not_found() {
-        Ok(reply::with_status("NOT_FOUND", StatusCode::NOT_FOUND))
-    } else if let Some(e) = err.find::<neo4rs::Error>() {
+        return Ok(reply::with_status("NOT_FOUND", StatusCode::NOT_FOUND))
+    }
+
+    if let Some(e) = err.find::<ReplicationError>() {
+        return Ok(reply::with_status("INTERNAL_SERVER_ERROR", StatusCode::INTERNAL_SERVER_ERROR))
+    }
+
+    if let Some(e) = err.find::<neo4rs::Error>() {
         Ok(reply::with_status("INTERNAL_SERVER_ERROR", StatusCode::INTERNAL_SERVER_ERROR))
     } else {
         eprintln!("unhandled rejection: {:?}", err);
@@ -56,13 +73,19 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
     }
 }
 
-async fn route_handler(from_system_name: String, to_system_name: String, graph: Arc<Graph>) -> Result<impl Reply, Rejection> {
+async fn routes_handler(from_system_name: String, to_system_name: String, graph: Arc<Graph>) -> Result<impl Reply, Rejection> {
     let route = find_shortest_route(graph, from_system_name, to_system_name)
         .await.unwrap().unwrap();
     Ok(json::<Vec<_>>(&route))
 }
 
-async fn refresh_eve_scout_system_relations(client: Client, graph: Arc<Graph>) -> Result<(), Box<dyn Error + Send + Sync>> {
+async fn wormholes_handler(client: Client, graph: Arc<Graph>) -> Result<impl Reply, Rejection> {
+    refresh_eve_scout_system_relations(client, graph.clone()).await.unwrap();
+    rebuild_system_jump_graph(graph).await.unwrap();
+    Ok(reply())
+}
+
+async fn refresh_eve_scout_system_relations(client: Client, graph: Arc<Graph>) -> Result<(), ReplicationError> {
     drop_system_connections(&graph, "Thera").await?;
     drop_system_connections(&graph, "Turnur").await?;
 
@@ -129,6 +152,8 @@ impl From<SystemEsiResponse> for System {
 enum ReplicationError {
     #[error("failed to retrieve data from the source")]
     SourceError(#[from] reqwest::Error),
+    #[error("failed to process the data")]
+    ProcessError(#[from] JoinError),
     #[error("failed to persist data to the target")]
     TargetError(#[from] neo4rs::Error),
 }
