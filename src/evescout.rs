@@ -46,7 +46,7 @@ mod tests {
     #[tokio::test]
     async fn should_get_public_signatures() {
         let client = Client::new();
-        let signatures = get_public_signatures(&client).await.unwrap();
+        let signatures = get_public_signatures(client).await.unwrap();
 
         assert!(signatures.len() > 0);
         println!("{:?}", signatures);

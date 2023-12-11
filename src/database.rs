@@ -1,7 +1,7 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
-use neo4rs::{Error, Graph, query};
+use neo4rs::{Error, Graph, query, Row};
 use serde::{Deserialize, Serialize};
 use std::error;
 use crate::evescout::EveScoutSignature;
@@ -47,6 +47,7 @@ pub(crate) struct System {
     pub star_id: Option<i64>,
     pub stargates: Option<Vec<i64>>,
     pub system_id: i64,
+    pub last_hour_kills: Option<i64>,
 }
 
 pub(crate) async fn save_system(graph: &Arc<Graph>, system: &System) -> Result<(), Error> {
@@ -208,6 +209,15 @@ pub(crate) async fn save_wormhole(graph: Arc<Graph>, signature: EveScoutSignatur
     create_system_jump(graph.clone(), signature.out_system_id.clone(), signature.in_system_id.clone()).await
 }
 
+pub(crate) async fn set_last_hour_system_kills(graph: Arc<Graph>, system_id: i64, kills: i64) -> Result<(), Error> {
+    let set_system_kills_statement = "
+        MATCH (s:System {system_id: $system_id})
+        SET s.last_hour_kills = $kills
+        RETURN s";
+
+    graph.run(query(set_system_kills_statement).param("system_id", system_id).param("kills", kills)).await
+}
+
 pub(crate) async fn create_system_jump(graph: Arc<Graph>, source_system: i64, dest_system: i64) -> Result<(), Error> {
     let inbound_connection = "\
         MATCH (source:System {system_id: $source_system_id})\
@@ -258,7 +268,7 @@ pub(crate) async fn relate_all_systems(graph: Arc<Graph>) -> Result<(), Box<dyn 
     Ok(())
 }
 
-pub async fn rebuild_system_jump_graph(graph: Arc<Graph>) -> Result<(), neo4rs::Error> {
+pub async fn rebuild_system_jump_graph(graph: Arc<Graph>) -> Result<(), Error> {
     drop_system_jump_graph(&graph).await?;
     build_system_jump_graph(graph).await
 }

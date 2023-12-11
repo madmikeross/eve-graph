@@ -144,6 +144,7 @@ impl From<SystemEsiResponse> for System {
             star_id: s.star_id,
             stargates: s.stargates,
             system_id: s.system_id,
+            last_hour_kills: Some(0)
         }
     }
 }
