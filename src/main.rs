@@ -12,7 +12,7 @@ use warp::hyper::StatusCode;
 use warp::reply::json;
 
 use crate::database::*;
-use crate::esi::{get_stargate_details, get_system_details, get_system_ids, StargateEsiResponse, SystemEsiResponse};
+use crate::esi::{get_stargate_details, get_system_details, get_system_ids, get_system_jumps, get_system_kills, StargateEsiResponse, SystemEsiResponse};
 use crate::evescout::get_public_signatures;
 
 mod database;
@@ -29,6 +29,13 @@ async fn main() {
     // pull_all_stargates(&client, graph.clone()).await?;
     // relate_all_systems(graph.clone()).await?;
 
+    let systems = warp::path!("systems" / "risk");
+    let systems_routes = systems
+        .and(warp::post())
+        .and(with_client(client.clone()))
+        .and(with_graph(graph.clone()))
+        .and_then(systems_risk_handler);
+
     let wormholes = warp::path!("wormholes" / "refresh");
     let wormholes_routes = wormholes
         .and(warp::post())
@@ -41,8 +48,10 @@ async fn main() {
         .and(warp::get())
         .and(with_graph(graph.clone()))
         .and_then(routes_handler);
+
     let service_routes = routes_routes
         .or(wormholes_routes)
+        .or(systems_routes)
         .recover(handle_rejection);
 
     warp::serve(service_routes).run(([127, 0, 0, 1], 8008)).await;
@@ -82,6 +91,11 @@ async fn routes_handler(from_system_name: String, to_system_name: String, graph:
 async fn wormholes_handler(client: Client, graph: Arc<Graph>) -> Result<impl Reply, Rejection> {
     refresh_eve_scout_system_relations(client, graph.clone()).await.unwrap();
     rebuild_system_jump_graph(graph).await.unwrap();
+    Ok(reply())
+}
+
+async fn systems_risk_handler(client: Client, graph: Arc<Graph>) -> Result<impl Reply, Rejection> {
+    pull_system_risk(client, graph).await.unwrap();
     Ok(reply())
 }
 
@@ -216,6 +230,47 @@ async fn pull_system_stargates(client: Client, graph: Arc<Graph>, system_id: i64
             Ok(())
         }
     }
+}
+
+async fn pull_system_kills(client: Client, graph: Arc<Graph>) -> Result<i32, ReplicationError> {
+    let response = get_system_kills(&client).await?;
+
+    let galaxy_kills: i32 = response.system_kills.iter().map(|s| s.ship_kills).sum();
+
+    let kill_saves: Vec<_> = response.system_kills
+        .iter()
+        .map(|system_kill| set_last_hour_system_kills(graph.clone(), system_kill.system_id, system_kill.ship_kills))
+        .collect();
+    futures::future::try_join_all(kill_saves).await?;
+
+    Ok(galaxy_kills)
+}
+
+async fn pull_system_jumps(client: Client, graph: Arc<Graph>) -> Result<i32, ReplicationError> {
+    let response = get_system_jumps(&client).await?;
+
+    let galaxy_jumps: i32 = response.system_jumps.iter().map(|s| s.ship_jumps).sum();
+
+    let jump_saves: Vec<_> = response.system_jumps
+        .iter()
+        .map(|system_jump| set_last_hour_system_kills(graph.clone(), system_jump.system_id, system_jump.ship_jumps))
+        .collect();
+    futures::future::try_join_all(jump_saves).await?;
+
+    Ok(galaxy_jumps)
+}
+
+async fn pull_system_risk(client: Client, graph: Arc<Graph>) -> Result<(), ReplicationError> {
+    let galaxy_kills = pull_system_kills(client.clone(), graph.clone()).await?;
+    let galaxy_jumps = pull_system_jumps(client.clone(), graph.clone()).await?;
+    let system_ids = get_all_system_ids(graph.clone()).await?;
+    let risk_saves: Vec<_> = system_ids
+        .iter()
+        .map(|&system_id| tokio::spawn(set_system_jump_risk(graph.clone(), system_id, galaxy_jumps, galaxy_kills)))
+        .collect();
+    futures::future::try_join_all(risk_saves).await?;
+
+    Ok(())
 }
 
 async fn pull_stargate_if_missing(client: Client, graph: Arc<Graph>, stargate_id: i64) -> Result<(), ReplicationError> {

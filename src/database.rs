@@ -209,13 +209,39 @@ pub(crate) async fn save_wormhole(graph: Arc<Graph>, signature: EveScoutSignatur
     create_system_jump(graph.clone(), signature.out_system_id.clone(), signature.in_system_id.clone()).await
 }
 
-pub(crate) async fn set_last_hour_system_kills(graph: Arc<Graph>, system_id: i64, kills: i64) -> Result<(), Error> {
+pub(crate) async fn set_last_hour_system_jumps(graph: Arc<Graph>, system_id: i64, jumps: i32) -> Result<(), Error> {
+    let set_system_jumps_statement = "
+        MATCH (s:System {system_id: $system_id})
+        SET s.jumps = $jumps";
+
+    graph.run(query(set_system_jumps_statement).param("system_id", system_id).param("jumps", jumps)).await
+}
+
+pub(crate) async fn set_last_hour_system_kills(graph: Arc<Graph>, system_id: i64, kills: i32) -> Result<(), Error> {
     let set_system_kills_statement = "
         MATCH (s:System {system_id: $system_id})
-        SET s.last_hour_kills = $kills
-        RETURN s";
+        SET s.kills = $kills";
 
     graph.run(query(set_system_kills_statement).param("system_id", system_id).param("kills", kills)).await
+}
+
+pub(crate) async fn set_system_jump_risk(graph: Arc<Graph>, system_id: i64, galaxy_jumps: i32, galaxy_kills: i32) -> Result<(), Error> {
+    let system_query = "MATCH (s:System {system_id: $system_id}) RETURN s.jumps AS jumps, s.kills AS kills LIMIT 1";
+    let mut result = graph.execute(query(system_query)
+        .param("system_id", system_id)).await.unwrap();
+
+    let row = result.next().await.unwrap().unwrap();
+    let jumps: i32 = row.get("jumps").unwrap();
+    let kills: i32 = row.get("kills").unwrap();
+
+    let galaxy_average_jump_risk = galaxy_jumps as f64/galaxy_kills as f64;
+    let system_jump_risk: f64 = if jumps > 0 { kills as f64/jumps as f64} else { kills.into() };
+    let total_risk = system_jump_risk + galaxy_average_jump_risk;
+
+    let set_system_risk = "
+        MATCH (otherSystem)-[r:JUMP]->(s:System {system_id: $system_id})
+        SET r.risk = $risk";
+    graph.run(query(set_system_risk).param("system_id", system_id).param("risk", total_risk)).await
 }
 
 pub(crate) async fn create_system_jump(graph: Arc<Graph>, source_system: i64, dest_system: i64) -> Result<(), Error> {
@@ -314,7 +340,38 @@ pub(crate) async fn find_shortest_route(graph: Arc<Graph>, from_system_name: Str
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use neo4rs::{Graph, query};
+    use serde::Deserialize;
     use crate::database::{get_all_system_ids, get_graph_client, get_system};
+
+    #[derive(Deserialize)]
+    struct StructWithOption {
+        a: Option<String>
+    }
+
+    // This is an open issue in neo4rs https://github.com/neo4j-labs/neo4rs/issues/147
+    #[tokio::test]
+    async fn should_read_struct_with_option() {
+        let graph = Arc::new(Graph::new("bolt://localhost:7687", "neo4j", "neo4j").await.unwrap());
+        let a_val: Option<String> = None;
+        let mut result = graph.execute(query("CREATE (ts:TestStruct {a: $a}) RETURN ts")
+            .param("a", a_val))
+            .await
+            .unwrap();
+        let Ok(Some(row)) = result.next().await else { todo!() };
+        let test_struct: StructWithOption = row.get("ts").unwrap();
+
+        assert_eq!(test_struct.a, None);
+    }
+
+
+    #[tokio::test]
+    async fn should_get_all_system_ids() {
+        let system_ids = get_all_system_ids(get_graph_client().await).await.unwrap();
+
+        assert!(system_ids.len() > 0)
+    }
 
     #[tokio::test]
     async fn should_read_system_from_database() {
