@@ -215,7 +215,7 @@ async fn pull_system_stargates(client: Client, graph: Arc<Graph>, system_id: i64
     let system = get_system(graph.clone(), system_id).await?;
     let stargate_pulls: Vec<_> = system.unwrap().stargates
         .iter()
-        .map(|&stargate_id| tokio::spawn(pull_stargate_if_missing(client.clone(), graph.clone(), stargate_id)))
+        .map(|&stargate_id| tokio::spawn(pull_stargate(client.clone(), graph.clone(), stargate_id)))
         .collect();
     futures::future::try_join_all(stargate_pulls).await?;
     Ok(())

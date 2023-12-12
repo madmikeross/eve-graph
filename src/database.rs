@@ -169,8 +169,9 @@ pub(crate) async fn save_stargate(graph: Arc<Graph>, stargate: &Stargate) -> Res
 }
 
 pub(crate) async fn save_wormhole(graph: Arc<Graph>, signature: EveScoutSignature) -> Result<(), Error> {
-    create_system_jump_if_missing(graph.clone(), signature.in_system_id.clone(), signature.out_system_id.clone()).await?;
-    create_system_jump_if_missing(graph.clone(), signature.out_system_id.clone(), signature.in_system_id.clone()).await
+    println!("Saving wormhole from {} to {}", signature.in_system_id, signature.out_system_id);
+    create_system_jump(graph.clone(), signature.in_system_id.clone(), signature.out_system_id.clone()).await?;
+    create_system_jump(graph.clone(), signature.out_system_id.clone(), signature.in_system_id.clone()).await
 }
 
 pub(crate) async fn set_last_hour_system_jumps(graph: Arc<Graph>, system_id: i64, jumps: i32) -> Result<(), Error> {
@@ -214,28 +215,22 @@ pub(crate) async fn set_system_jump_risk(graph: Arc<Graph>, system_id: i64, gala
     Ok(())
 }
 
-async fn create_system_jump_if_missing(graph: Arc<Graph>, source_system: i64, dest_system: i64) -> Result<(), Error> {
+async fn jump_exists(graph: Arc<Graph>, source_system: i64, dest_system: i64) -> Result<bool, Error> {
     let jump_exists_statement = "\
         MATCH (:System {system_id: $source_system})-[r:JUMP]->(:System {system_id: $dest_system})
-        RETURN r IS NOT NULL AS jump_exists;";
-
+        RETURN COUNT(r) AS count";
     let mut result = graph.execute(query(jump_exists_statement)
         .param("source_system", source_system)
         .param("dest_system", dest_system))
-        .await
-        .unwrap();
+        .await?;
+    match result.next().await? {
+        Some(row) => Ok(row.get::<i64>("count").map_or(false, |count| count > 0)),
+        None => Ok(false)
+    }
+}
 
-
-    let jump_exists: bool = match result.next().await.unwrap() {
-        None => {
-            false
-        }
-        Some(row) => {
-            row.get("jump_exists").unwrap_or(false)
-        }
-    };
-
-    if !jump_exists {
+async fn create_system_jump_if_missing(graph: Arc<Graph>, source_system: i64, dest_system: i64) -> Result<(), Error> {
+    if !jump_exists(graph.clone(), source_system, dest_system).await? {
         create_system_jump(graph, source_system, dest_system).await?;
     }
 
