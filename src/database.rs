@@ -1,7 +1,6 @@
-use std::ops::Deref;
 use std::sync::Arc;
 
-use neo4rs::{Error, Graph, query, Row};
+use neo4rs::{Error, Graph, query};
 use serde::{Deserialize, Serialize};
 
 use crate::evescout::EveScoutSignature;
@@ -9,11 +8,11 @@ use crate::evescout::EveScoutSignature;
 pub(crate) async fn get_graph_client() -> Arc<Graph> {
     let uri = "bolt://localhost:7687";
     let user = "neo4j";
-    let pass = "neo4jneo4j"; // assumes you have accessed via the browser and updated pass
+    let pass = "neo4jneo4j";
     Arc::new(Graph::new(uri, user, pass).await.unwrap())
 }
 
-pub(crate) async fn system_id_exists(graph: &Graph, system_id: i64) -> Result<bool, Error> {
+pub(crate) async fn system_id_exists(graph: Arc<Graph>, system_id: i64) -> Result<bool, Error> {
     let system_exists = "MATCH (s:System {system_id: $system_id}) RETURN COUNT(s) as count LIMIT 1";
     let mut result = graph.execute(query(system_exists).param("system_id", system_id)).await?;
 
@@ -99,9 +98,20 @@ pub(crate) async fn get_system(graph: Arc<Graph>, system_id: i64) -> Result<Opti
     }
 }
 
+pub(crate) async fn get_stargate(graph: Arc<Graph>, stargate_id: i64) -> Result<Option<Stargate>, Error> {
+    let get_stargate_statement = "MATCH (sg:Stargate {stargate_id: $stargate_id}) RETURN sg LIMIT 1";
+    let mut result = graph.execute(query(get_stargate_statement).param("stargate_id", stargate_id)).await?;
+
+    match result.next().await? {
+        Some(row) => {
+            Ok(row.get("sg").ok())
+        }
+        None => Ok(None),
+    }
+}
+
 pub async fn get_all_system_ids(graph: Arc<Graph>) -> Result<Vec<i64>, Error> {
     let get_all_system_ids_statement = "MATCH (s:System) RETURN s.system_id AS system_id";
-
     let mut result = graph.execute(query(get_all_system_ids_statement)).await?;
     let mut system_ids = Vec::new();
 
@@ -153,7 +163,9 @@ pub(crate) async fn save_stargate(graph: Arc<Graph>, stargate: &Stargate) -> Res
         .param("type_id", stargate.type_id))
         .await?;
 
-    create_system_jump_if_missing(graph.clone(), stargate.system_id, stargate.destination_system_id).await
+    create_system_jump_if_missing(graph.clone(), stargate.system_id, stargate.destination_system_id).await?;
+
+    Ok(())
 }
 
 pub(crate) async fn save_wormhole(graph: Arc<Graph>, signature: EveScoutSignature) -> Result<(), Error> {
@@ -166,7 +178,9 @@ pub(crate) async fn set_last_hour_system_jumps(graph: Arc<Graph>, system_id: i64
         MATCH (s:System {system_id: $system_id})
         SET s.jumps = $jumps";
 
-    graph.run(query(set_system_jumps_statement).param("system_id", system_id).param("jumps", jumps)).await
+    graph.run(query(set_system_jumps_statement).param("system_id", system_id).param("jumps", jumps)).await?;
+
+    Ok(())
 }
 
 pub(crate) async fn set_last_hour_system_kills(graph: Arc<Graph>, system_id: i64, kills: i32) -> Result<(), Error> {
@@ -174,7 +188,9 @@ pub(crate) async fn set_last_hour_system_kills(graph: Arc<Graph>, system_id: i64
         MATCH (s:System {system_id: $system_id})
         SET s.kills = $kills";
 
-    graph.run(query(set_system_kills_statement).param("system_id", system_id).param("kills", kills)).await
+    graph.run(query(set_system_kills_statement).param("system_id", system_id).param("kills", kills)).await?;
+
+    Ok(())
 }
 
 pub(crate) async fn set_system_jump_risk(graph: Arc<Graph>, system_id: i64, galaxy_jumps: i32, galaxy_kills: i32) -> Result<(), Error> {
@@ -193,7 +209,9 @@ pub(crate) async fn set_system_jump_risk(graph: Arc<Graph>, system_id: i64, gala
     let set_system_risk = "
         MATCH (otherSystem)-[r:JUMP]->(s:System {system_id: $system_id})
         SET r.risk = $risk";
-    graph.run(query(set_system_risk).param("system_id", system_id).param("risk", total_risk)).await
+    graph.run(query(set_system_risk).param("system_id", system_id).param("risk", total_risk)).await?;
+
+    Ok(())
 }
 
 async fn create_system_jump_if_missing(graph: Arc<Graph>, source_system: i64, dest_system: i64) -> Result<(), Error> {
@@ -218,10 +236,10 @@ async fn create_system_jump_if_missing(graph: Arc<Graph>, source_system: i64, de
     };
 
     if !jump_exists {
-        create_system_jump(graph, source_system, dest_system).await
-    } else {
-        Ok(())
+        create_system_jump(graph, source_system, dest_system).await?;
     }
+
+    Ok(())
 }
 
 pub(crate) async fn create_system_jump(graph: Arc<Graph>, source_system: i64, dest_system: i64) -> Result<(), Error> {
@@ -233,12 +251,16 @@ pub(crate) async fn create_system_jump(graph: Arc<Graph>, source_system: i64, de
     graph.run(query(inbound_connection)
         .param("source_system_id", source_system)
         .param("dest_system_id", dest_system))
-        .await
+        .await?;
+
+    Ok(())
 }
 
 pub(crate) async fn drop_system_jump_graph(graph: &Arc<Graph>) -> Result<(), Error> {
     let drop_graph = "CALL gds.graph.drop('system-map')";
-    graph.run(query(drop_graph)).await
+    graph.run(query(drop_graph)).await?;
+
+    Ok(())
 }
 
 pub(crate) async fn build_system_jump_graph(graph: Arc<Graph>) -> Result<(), Error> {
@@ -251,21 +273,23 @@ pub(crate) async fn build_system_jump_graph(graph: Arc<Graph>) -> Result<(), Err
                 relationshipProperties: 'cost'
             }
         )";
-    graph.run(query(build_graph)).await
+    graph.run(query(build_graph)).await?;
+
+    Ok(())
 }
 
 pub(crate) async fn drop_system_connections(graph: &Arc<Graph>, system_name: &str) -> Result<(), Error> {
     let drop_thera_connections = "\
         MATCH (:System {name: $system_name})-[r]-()
         DELETE r";
-
     graph.run(query(drop_thera_connections).param("system_name", system_name)).await?;
     Ok(())
 }
 
 pub async fn rebuild_system_jump_graph(graph: Arc<Graph>) -> Result<(), Error> {
     drop_system_jump_graph(&graph).await?;
-    build_system_jump_graph(graph).await
+    build_system_jump_graph(graph).await?;
+    Ok(())
 }
 
 pub(crate) async fn find_shortest_route(graph: Arc<Graph>, from_system_name: String, to_system_name: String) -> Result<Option<Vec<String>>, Error> {
@@ -295,15 +319,7 @@ pub(crate) async fn find_shortest_route(graph: Arc<Graph>, from_system_name: Str
 
 #[cfg(test)]
 mod tests {
-    use serde::Deserialize;
-
-    use crate::database::{get_all_system_ids, get_graph_client, get_system};
-
-    #[derive(Deserialize)]
-    struct StructWithOption {
-        a: Option<String>,
-    }
-
+    use crate::database::{get_all_system_ids, get_graph_client, get_stargate, get_system};
 
     #[tokio::test]
     async fn should_get_all_system_ids() {
@@ -317,6 +333,13 @@ mod tests {
         let system_id = 31002238;
         let system = get_system(get_graph_client().await, system_id).await;
         assert_eq!(system.unwrap().unwrap().system_id, system_id)
+    }
+
+    #[tokio::test]
+    async fn should_read_stargate_from_database() {
+        let stargate_id = 50004615;
+        let stargate = get_stargate(get_graph_client().await, stargate_id).await;
+        assert_eq!(stargate.unwrap().unwrap().stargate_id, stargate_id)
     }
 
     #[tokio::test]

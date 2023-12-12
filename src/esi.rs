@@ -132,7 +132,7 @@ pub(crate) async fn get_system_jumps(client: &Client) -> Result<SystemJumpsRespo
 mod tests {
     use reqwest::Client;
 
-    use crate::esi::{get_system_jumps, get_system_kills};
+    use crate::esi::{get_stargate_details, get_system_jumps, get_system_kills};
 
     #[tokio::test]
     async fn should_get_system_kills() {
@@ -150,5 +150,16 @@ mod tests {
 
         assert!(&system_jumps_response.last_modified.is_some());
         assert!(&system_jumps_response.system_jumps.len() > &0);
+    }
+
+    #[tokio::test]
+    async fn should_get_stargate_details() {
+        let client = Client::new();
+        let stargate_id = 50011905;
+
+        let stargate = get_stargate_details(&client, stargate_id).await.unwrap();
+
+        assert_eq!(stargate.stargate_id, stargate_id);
+        assert_eq!(stargate.name, "Stargate (Vouskiaho)");
     }
 }
