@@ -187,22 +187,31 @@ pub(crate) async fn set_last_hour_system_kills(graph: Arc<Graph>, system_id: i64
 }
 
 pub(crate) async fn set_system_jump_risk(graph: Arc<Graph>, system_id: i64, galaxy_jumps: i32, galaxy_kills: i32) -> Result<(), Error> {
-    let system_query = "MATCH (s:System {system_id: $system_id}) RETURN s.jumps AS jumps, s.kills AS kills LIMIT 1";
-    let mut result = graph.execute(query(system_query)
-        .param("system_id", system_id)).await.unwrap();
+    println!("Getting jumps and kills from system {}", system_id);
+    match get_system(graph.clone(), system_id).await.unwrap() {
+        None => {
+            println!("System could not be retrieved when trying to set jump risk {}", system_id);
+            return Ok(());
+        }
+        Some(system) => {
+            let galaxy_average_jump_risk = if galaxy_jumps > 0 {
+                galaxy_kills as f64 / galaxy_jumps as f64
+            } else {
+                0.01 // galaxy jumps should never be zero, but just in case
+            };
 
-    let row = result.next().await.unwrap().unwrap();
-    let jumps: i32 = row.get("jumps").unwrap();
-    let kills: i32 = row.get("kills").unwrap();
+            // System jump risk scales with the square of system kills
+            let kills_squared = u32::pow(system.kills, 2);
+            let system_jump_risk: f64 = if system.jumps > 0 { kills_squared as f64 / system.jumps as f64 } else { kills_squared.into() };
+            let total_risk = system_jump_risk + galaxy_average_jump_risk;
 
-    let galaxy_average_jump_risk = galaxy_jumps as f64 / galaxy_kills as f64;
-    let system_jump_risk: f64 = if jumps > 0 { kills as f64 / jumps as f64 } else { kills.into() };
-    let total_risk = system_jump_risk + galaxy_average_jump_risk;
-
-    let set_system_risk = "
-        MATCH (otherSystem)-[r:JUMP]->(s:System {system_id: $system_id})
-        SET r.risk = $risk";
-    graph.run(query(set_system_risk).param("system_id", system_id).param("risk", total_risk)).await
+            println!("Setting jump risks into system {} as {}", system_id, total_risk);
+            let set_system_risk = "
+                MATCH (otherSystem)-[r:JUMP]->(s:System {system_id: $system_id})
+                SET r.risk = $risk";
+            graph.run(query(set_system_risk).param("system_id", system_id).param("risk", total_risk)).await
+        }
+    }
 }
 
 async fn jump_exists(graph: Arc<Graph>, source_system: i64, dest_system: i64) -> Result<bool, Error> {
@@ -244,6 +253,11 @@ pub(crate) async fn drop_system_jump_graph(graph: &Arc<Graph>) -> Result<(), Err
     graph.run(query(drop_graph)).await
 }
 
+pub(crate) async fn drop_jump_risk_graph(graph: Arc<Graph>) -> Result<(), Error> {
+    let drop_graph = "CALL gds.graph.drop('jump-risk')";
+    graph.run(query(drop_graph)).await
+}
+
 pub(crate) async fn build_system_jump_graph(graph: Arc<Graph>) -> Result<(), Error> {
     let build_graph = "\
         CALL gds.graph.project(
@@ -257,6 +271,20 @@ pub(crate) async fn build_system_jump_graph(graph: Arc<Graph>) -> Result<(), Err
     graph.run(query(build_graph)).await
 }
 
+pub(crate) async fn build_jump_risk_graph(graph: Arc<Graph>) -> Result<(), Error> {
+    let build_graph = "\
+        CALL gds.graph.project(
+            'jump-risk',
+            'System',
+            'JUMP',
+            {
+                relationshipProperties: 'risk'
+            }
+        )";
+    graph.run(query(build_graph)).await?;
+    Ok(())
+}
+
 pub(crate) async fn drop_system_connections(graph: &Arc<Graph>, system_name: &str) -> Result<(), Error> {
     let drop_thera_connections = "\
         MATCH (:System {name: $system_name})-[r]-()
@@ -264,9 +292,14 @@ pub(crate) async fn drop_system_connections(graph: &Arc<Graph>, system_name: &st
     graph.run(query(drop_thera_connections).param("system_name", system_name)).await
 }
 
-pub async fn rebuild_system_jump_graph(graph: Arc<Graph>) -> Result<(), Error> {
+pub async fn rebuild_jump_cost_graph(graph: Arc<Graph>) -> Result<(), Error> {
     drop_system_jump_graph(&graph).await?;
     build_system_jump_graph(graph).await
+}
+
+pub async fn rebuild_jump_risk_graph(graph: Arc<Graph>) -> Result<(), Error> {
+    drop_jump_risk_graph(graph.clone()).await?;
+    build_jump_risk_graph(graph.clone()).await
 }
 
 pub(crate) async fn find_shortest_route(graph: Arc<Graph>, from_system_name: String, to_system_name: String) -> Result<Option<Vec<String>>, Error> {
@@ -296,7 +329,9 @@ pub(crate) async fn find_shortest_route(graph: Arc<Graph>, from_system_name: Str
 
 #[cfg(test)]
 mod tests {
-    use crate::database::{get_all_system_ids, get_graph_client, get_stargate, get_system};
+    use reqwest::Client;
+    use crate::database::{build_jump_risk_graph, drop_jump_risk_graph, get_all_system_ids, get_graph_client, get_stargate, get_system, set_system_jump_risk};
+    use crate::{pull_system_jumps, pull_system_kills};
 
     #[tokio::test]
     async fn should_get_all_system_ids() {
@@ -307,9 +342,9 @@ mod tests {
 
     #[tokio::test]
     async fn should_read_system_from_database() {
-        let system_id = 31002238;
-        let system = get_system(get_graph_client().await, system_id).await;
-        assert_eq!(system.unwrap().unwrap().system_id, system_id)
+        let system_id = 30000276;
+        let system = get_system(get_graph_client().await, system_id).await.unwrap().unwrap();
+        assert_eq!(system.system_id, system_id)
     }
 
     #[tokio::test]
@@ -324,5 +359,26 @@ mod tests {
         let system_ids = get_all_system_ids(get_graph_client().await).await;
 
         assert_eq!(system_ids.unwrap().len(), 8436)
+    }
+
+    #[tokio::test]
+    async fn should_set_system_jump_risk() {
+        let client = Client::new();
+        let graph = get_graph_client().await;
+        let system_id = 30000276;
+        let galaxy_kills = pull_system_kills(client.clone(), graph.clone()).await.unwrap();
+        let galaxy_jumps = pull_system_jumps(client.clone(), graph.clone()).await.unwrap();
+
+        set_system_jump_risk(graph.clone(), system_id, galaxy_jumps, galaxy_kills).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn should_drop_jump_risk_graph() {
+        drop_jump_risk_graph(get_graph_client().await).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn should_create_jump_risk_graph() {
+        build_jump_risk_graph(get_graph_client().await).await.unwrap();
     }
 }

@@ -99,12 +99,13 @@ async fn routes_to_handler(from_system_name: String, to_system_name: String, gra
 
 async fn wormholes_refresh_handler(client: Client, graph: Arc<Graph>) -> Result<impl Reply, Rejection> {
     refresh_eve_scout_system_relations(client, graph.clone()).await.unwrap();
-    rebuild_system_jump_graph(graph).await.unwrap();
+    rebuild_jump_cost_graph(graph).await.unwrap();
     Ok(reply())
 }
 
 async fn systems_risk_handler(client: Client, graph: Arc<Graph>) -> Result<impl Reply, Rejection> {
-    pull_system_risk(client, graph).await.unwrap();
+    pull_system_risk(client, graph.clone()).await.unwrap();
+    rebuild_jump_risk_graph(graph).await.unwrap();
     Ok(reply())
 }
 
@@ -236,7 +237,7 @@ async fn pull_system_jumps(client: Client, graph: Arc<Graph>) -> Result<i32, Rep
     let galaxy_jumps: i32 = response.system_jumps.iter().map(|s| s.ship_jumps).sum();
     let jump_saves: Vec<_> = response.system_jumps
         .iter()
-        .map(|system_jump| tokio::spawn(set_last_hour_system_kills(graph.clone(), system_jump.system_id, system_jump.ship_jumps)))
+        .map(|system_jump| tokio::spawn(set_last_hour_system_jumps(graph.clone(), system_jump.system_id, system_jump.ship_jumps)))
         .collect();
     futures::future::try_join_all(jump_saves).await?;
     Ok(galaxy_jumps)
@@ -271,7 +272,7 @@ async fn pull_stargate(client: Client, graph: Arc<Graph>, stargate_id: i64) -> R
 mod tests {
     use reqwest::Client;
 
-    use crate::{pull_all_stargates, pull_system_stargates};
+    use crate::{pull_all_stargates, pull_system_jumps, pull_system_kills, pull_system_stargates};
     use crate::database::{get_graph_client, save_system, System};
     use crate::esi::get_system_details;
 
@@ -310,5 +311,25 @@ mod tests {
                 println!("Failed to pull system stargates");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn should_pull_system_jumps() {
+        let client = Client::new();
+        let graph = get_graph_client().await;
+
+        let total_jumps = pull_system_jumps(client, graph).await.unwrap();
+
+        assert!(total_jumps > 0)
+    }
+
+    #[tokio::test]
+    async fn should_pull_system_kills() {
+        let client = Client::new();
+        let graph = get_graph_client().await;
+
+        let total_kills = pull_system_kills(client, graph).await.unwrap();
+
+        assert!(total_kills > 0)
     }
 }
