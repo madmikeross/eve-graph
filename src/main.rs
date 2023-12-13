@@ -12,6 +12,7 @@ use warp::reply::json;
 use crate::database::*;
 use crate::esi::{get_stargate_details, get_system_details, get_system_ids, get_system_jumps, get_system_kills, StargateEsiResponse, SystemEsiResponse};
 use crate::evescout::get_public_signatures;
+use crate::ReplicationError::TargetError;
 
 mod database;
 mod esi;
@@ -190,9 +191,7 @@ enum ReplicationError {
 async fn pull_system(client: Client, graph: Arc<Graph>, system_id: i64, ) -> Result<(), ReplicationError> {
     let system_response = get_system_details(&client, system_id).await?;
     let system = System::from(system_response);
-    save_system(&graph, &system).await?;
-
-    Ok(())
+    save_system(&graph, &system).await.map_err(TargetError)
 }
 
 impl From<StargateEsiResponse> for Stargate {
@@ -265,8 +264,7 @@ async fn pull_stargate_if_missing(client: Client, graph: Arc<Graph>, stargate_id
 async fn pull_stargate(client: Client, graph: Arc<Graph>, stargate_id: i64) -> Result<(), ReplicationError> {
     let stargate_response = get_stargate_details(&client, stargate_id).await?;
     let stargate = Stargate::from(stargate_response);
-    save_stargate(graph.clone(), &stargate).await?;
-    Ok(())
+    save_stargate(graph.clone(), &stargate).await.map_err(TargetError)
 }
 
 #[cfg(test)]

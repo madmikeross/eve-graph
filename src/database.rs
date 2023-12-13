@@ -81,9 +81,7 @@ pub(crate) async fn save_system(graph: &Arc<Graph>, system: &System) -> Result<(
         .param("stargates", system.stargates.clone())
         .param("kills", system.kills)
         .param("jumps", system.jumps))
-        .await?;
-
-    Ok(())
+        .await
 }
 
 pub(crate) async fn get_system(graph: Arc<Graph>, system_id: i64) -> Result<Option<System>, Error> {
@@ -163,9 +161,7 @@ pub(crate) async fn save_stargate(graph: Arc<Graph>, stargate: &Stargate) -> Res
         .param("type_id", stargate.type_id))
         .await?;
 
-    create_system_jump_if_missing(graph.clone(), stargate.system_id, stargate.destination_system_id).await?;
-
-    Ok(())
+    create_system_jump_if_missing(graph.clone(), stargate.system_id, stargate.destination_system_id).await
 }
 
 pub(crate) async fn save_wormhole(graph: Arc<Graph>, signature: EveScoutSignature) -> Result<(), Error> {
@@ -179,9 +175,7 @@ pub(crate) async fn set_last_hour_system_jumps(graph: Arc<Graph>, system_id: i64
         MATCH (s:System {system_id: $system_id})
         SET s.jumps = $jumps";
 
-    graph.run(query(set_system_jumps_statement).param("system_id", system_id).param("jumps", jumps)).await?;
-
-    Ok(())
+    graph.run(query(set_system_jumps_statement).param("system_id", system_id).param("jumps", jumps)).await
 }
 
 pub(crate) async fn set_last_hour_system_kills(graph: Arc<Graph>, system_id: i64, kills: i32) -> Result<(), Error> {
@@ -189,9 +183,7 @@ pub(crate) async fn set_last_hour_system_kills(graph: Arc<Graph>, system_id: i64
         MATCH (s:System {system_id: $system_id})
         SET s.kills = $kills";
 
-    graph.run(query(set_system_kills_statement).param("system_id", system_id).param("kills", kills)).await?;
-
-    Ok(())
+    graph.run(query(set_system_kills_statement).param("system_id", system_id).param("kills", kills)).await
 }
 
 pub(crate) async fn set_system_jump_risk(graph: Arc<Graph>, system_id: i64, galaxy_jumps: i32, galaxy_kills: i32) -> Result<(), Error> {
@@ -210,9 +202,7 @@ pub(crate) async fn set_system_jump_risk(graph: Arc<Graph>, system_id: i64, gala
     let set_system_risk = "
         MATCH (otherSystem)-[r:JUMP]->(s:System {system_id: $system_id})
         SET r.risk = $risk";
-    graph.run(query(set_system_risk).param("system_id", system_id).param("risk", total_risk)).await?;
-
-    Ok(())
+    graph.run(query(set_system_risk).param("system_id", system_id).param("risk", total_risk)).await
 }
 
 async fn jump_exists(graph: Arc<Graph>, source_system: i64, dest_system: i64) -> Result<bool, Error> {
@@ -246,16 +236,12 @@ pub(crate) async fn create_system_jump(graph: Arc<Graph>, source_system: i64, de
     graph.run(query(inbound_connection)
         .param("source_system_id", source_system)
         .param("dest_system_id", dest_system))
-        .await?;
-
-    Ok(())
+        .await
 }
 
 pub(crate) async fn drop_system_jump_graph(graph: &Arc<Graph>) -> Result<(), Error> {
     let drop_graph = "CALL gds.graph.drop('system-map')";
-    graph.run(query(drop_graph)).await?;
-
-    Ok(())
+    graph.run(query(drop_graph)).await
 }
 
 pub(crate) async fn build_system_jump_graph(graph: Arc<Graph>) -> Result<(), Error> {
@@ -268,23 +254,19 @@ pub(crate) async fn build_system_jump_graph(graph: Arc<Graph>) -> Result<(), Err
                 relationshipProperties: 'cost'
             }
         )";
-    graph.run(query(build_graph)).await?;
-
-    Ok(())
+    graph.run(query(build_graph)).await
 }
 
 pub(crate) async fn drop_system_connections(graph: &Arc<Graph>, system_name: &str) -> Result<(), Error> {
     let drop_thera_connections = "\
         MATCH (:System {name: $system_name})-[r]-()
         DELETE r";
-    graph.run(query(drop_thera_connections).param("system_name", system_name)).await?;
-    Ok(())
+    graph.run(query(drop_thera_connections).param("system_name", system_name)).await
 }
 
 pub async fn rebuild_system_jump_graph(graph: Arc<Graph>) -> Result<(), Error> {
     drop_system_jump_graph(&graph).await?;
-    build_system_jump_graph(graph).await?;
-    Ok(())
+    build_system_jump_graph(graph).await
 }
 
 pub(crate) async fn find_shortest_route(graph: Arc<Graph>, from_system_name: String, to_system_name: String) -> Result<Option<Vec<String>>, Error> {

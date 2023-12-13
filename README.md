@@ -1,25 +1,24 @@
 # eve-graph
-An application for discovering routes between Systems in EVE.
+An application for finding optimal routes between systems in EVE Online.
 
-## Current State
-The application is still currently in a rapid prototyping phase. As such, there are few tests, and significant rewrites
-should be expected.
-
-Currently, the application will:
-* Build a graph database of systems and their connections (via stargates and wormholes)
-* Provide shortest-path route finding between two systems
-
-Next steps:
-* Move database initialization steps to route handlers
-* Support route finding filters like security and avoidance lists
-
-## How to run
+## How to use
+### Pre-requisites
 You will need a locally installed neo4j service. User and pass should be `neo4j` and `neo4jneo4j` respectively, or
-change them yourself in `main.rs` as they are temporarily hard coded for convenience. You need to install the data
-science library. Follow these [installation instructions](https://neo4j.com/docs/graph-data-science/current/installation/neo4j-server/).
+change them yourself in `main.rs` as they are temporarily hard coded for convenience. After installing neo4j, you need
+to install the data science library. Follow these [installation instructions](https://neo4j.com/docs/graph-data-science/current/installation/neo4j-server/).
 
-Build the crate, and run the commented out lines of the tokio main block in `main.rs`. After main finishes running, you
-should have a connected graph of systems in the database (this is a temporary transition step from prototype to api).
-Now you may comment out the database building and run the warp configuration, make a POST to `127.0.0.1:8008/wormholes/refresh` to
-fetch the current wormhole signatures from eve scout and build the system graph. Now you can issue a request for a route
-in your browser with a GET request to `127.0.0.1:8008/routes/Cleyd/to/Jita`.
+In order to build the application and run it, you will need to [install Rust](https://www.rust-lang.org/tools/install).
+
+### Building the database
+Run the crate `cargo run` to start a local web server at `127.0.0.1:8008`. Next you need to pull down the public system
+stargate and wormhole data with a series of requests (you can use Postman to issue POST requests if you prefer a gui).
+```bash
+curl -X POST 127.0.0.1:8008/systems/refresh
+curl -X POST 127.0.0.1:8008/stargates/refresh
+curl -X POST 127.0.0.1:8008/wormholes/refresh
+```
+These requests should each take a few seconds to complete, but if you are waiting minutes, something has gone wrong.
+
+### Finding the shortest route
+If you want to find the shortest route between two systems, say Cleyd and Jita, simply issue a get request to
+`127.0.0.1:8008/routes/Cleyd/to/Jita` (can be done in a browser, with curl, or via Postman).
