@@ -32,7 +32,9 @@ pub(crate) struct EveScoutSignature {
     comment: Option<String>,
 }
 
-pub(crate) async fn get_public_signatures(client: Client) -> Result<Vec<EveScoutSignature>, reqwest::Error> {
+pub(crate) async fn get_public_signatures(
+    client: Client,
+) -> Result<Vec<EveScoutSignature>, reqwest::Error> {
     let get_public_signatures = format!("https://api.eve-scout.com/v2/public/signatures");
     let response = client.get(&get_public_signatures).send().await?;
     response.json().await
@@ -40,8 +42,8 @@ pub(crate) async fn get_public_signatures(client: Client) -> Result<Vec<EveScout
 
 #[cfg(test)]
 mod tests {
-    use reqwest::Client;
     use crate::evescout::get_public_signatures;
+    use reqwest::Client;
 
     #[tokio::test]
     async fn should_get_public_signatures() {

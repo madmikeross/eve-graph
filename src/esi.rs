@@ -45,14 +45,26 @@ pub(crate) struct Destination {
     pub system_id: i64,
 }
 
-pub(crate) async fn get_system_details(client: &Client, system_id: i64) -> Result<SystemEsiResponse, reqwest::Error> {
-    let system_detail_url = format!("https://esi.evetech.net/latest/universe/systems/{}", system_id);
+pub(crate) async fn get_system_details(
+    client: &Client,
+    system_id: i64,
+) -> Result<SystemEsiResponse, reqwest::Error> {
+    let system_detail_url = format!(
+        "https://esi.evetech.net/latest/universe/systems/{}",
+        system_id
+    );
     let response = client.get(&system_detail_url).send().await?;
     response.json().await
 }
 
-pub(crate) async fn get_stargate_details(client: &Client, stargate_id: i64) -> Result<StargateEsiResponse, reqwest::Error> {
-    let stargate_url = format!("https://esi.evetech.net/latest/universe/stargates/{}", stargate_id);
+pub(crate) async fn get_stargate_details(
+    client: &Client,
+    stargate_id: i64,
+) -> Result<StargateEsiResponse, reqwest::Error> {
+    let stargate_url = format!(
+        "https://esi.evetech.net/latest/universe/stargates/{}",
+        stargate_id
+    );
     let response = client.get(&stargate_url).send().await?;
     response.json().await
 }
@@ -62,10 +74,10 @@ pub(crate) async fn get_system_ids(client: &Client) -> Result<Vec<i64>, reqwest:
     let response = client.get(systems_url).send().await?;
     response.json().await
 }
- #[derive(Debug)]
+#[derive(Debug)]
 pub(crate) struct SystemKillsResponse {
     last_modified: Option<DateTime<Utc>>,
-    pub system_kills: Vec<SystemKills>
+    pub system_kills: Vec<SystemKills>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,10 +88,14 @@ pub(crate) struct SystemKills {
     pub system_id: i64,
 }
 
-pub(crate) async fn get_system_kills(client: &Client) -> Result<SystemKillsResponse, reqwest::Error> {
+pub(crate) async fn get_system_kills(
+    client: &Client,
+) -> Result<SystemKillsResponse, reqwest::Error> {
     let system_kills_url = "https://esi.evetech.net/latest/universe/system_kills/";
     let response = client.get(system_kills_url).send().await?;
-    let last_modified: Option<DateTime<Utc>> = response.headers().get("Last-Modified")
+    let last_modified: Option<DateTime<Utc>> = response
+        .headers()
+        .get("Last-Modified")
         .unwrap()
         .to_str()
         .ok()
@@ -92,14 +108,14 @@ pub(crate) async fn get_system_kills(client: &Client) -> Result<SystemKillsRespo
     let system_kills = response.json().await?;
     Ok(SystemKillsResponse {
         last_modified,
-        system_kills
+        system_kills,
     })
 }
 
 #[derive(Debug)]
 pub(crate) struct SystemJumpsResponse {
     last_modified: Option<DateTime<Utc>>,
-    pub system_jumps: Vec<SystemJumps>
+    pub system_jumps: Vec<SystemJumps>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,10 +124,14 @@ pub(crate) struct SystemJumps {
     pub system_id: i64,
 }
 
-pub(crate) async fn get_system_jumps(client: &Client) -> Result<SystemJumpsResponse, reqwest::Error> {
+pub(crate) async fn get_system_jumps(
+    client: &Client,
+) -> Result<SystemJumpsResponse, reqwest::Error> {
     let system_jumps_url = "https://esi.evetech.net/latest/universe/system_jumps/";
     let response = client.get(system_jumps_url).send().await?;
-    let last_modified: Option<DateTime<Utc>> = response.headers().get("Last-Modified")
+    let last_modified: Option<DateTime<Utc>> = response
+        .headers()
+        .get("Last-Modified")
         .unwrap()
         .to_str()
         .ok()
@@ -124,7 +144,7 @@ pub(crate) async fn get_system_jumps(client: &Client) -> Result<SystemJumpsRespo
     let system_jumps = response.json().await?;
     Ok(SystemJumpsResponse {
         last_modified,
-        system_jumps
+        system_jumps,
     })
 }
 
