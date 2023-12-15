@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
-use neo4rs::Error::DeserializationError;
-use neo4rs::{query, Error, Graph};
+use neo4rs::{query, Error, Error::DeserializationError, Graph, Row};
 use serde::{Deserialize, Serialize};
 
 use crate::evescout::EveScoutSignature;
@@ -20,9 +19,13 @@ pub(crate) async fn system_id_exists(graph: Arc<Graph>, system_id: i64) -> Resul
         .await?;
 
     match result.next().await? {
-        Some(row) => Ok(row.get::<i64>("count").map_or(false, |count| count > 0)),
+        Some(row) => Ok(row_count_is_positive(row)),
         None => Ok(false),
     }
+}
+
+fn row_count_is_positive(row: Row) -> bool {
+    row.get::<i64>("count").map_or(false, |count| count > 0)
 }
 
 pub(crate) async fn stargate_id_exists(graph: Arc<Graph>, stargate_id: i64) -> Result<bool, Error> {
@@ -33,7 +36,7 @@ pub(crate) async fn stargate_id_exists(graph: Arc<Graph>, stargate_id: i64) -> R
         .await?;
 
     match result.next().await? {
-        Some(row) => Ok(row.get::<i64>("count").map_or(false, |count| count > 0)),
+        Some(row) => Ok(row_count_is_positive(row)),
         None => Ok(false),
     }
 }
@@ -309,7 +312,7 @@ async fn jump_exists(
         )
         .await?;
     match result.next().await? {
-        Some(row) => Ok(row.get::<i64>("count").map_or(false, |count| count > 0)),
+        Some(row) => Ok(row_count_is_positive(row)),
         None => Ok(false),
     }
 }

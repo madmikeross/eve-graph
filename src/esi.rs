@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use reqwest::Client;
+use reqwest::{Client, Response};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
@@ -93,6 +93,15 @@ pub(crate) async fn get_system_kills(
 ) -> Result<SystemKillsResponse, reqwest::Error> {
     let system_kills_url = "https://esi.evetech.net/latest/universe/system_kills/";
     let response = client.get(system_kills_url).send().await?;
+    let last_modified = get_last_modified_date(&response);
+    let system_kills = response.json().await?;
+    Ok(SystemKillsResponse {
+        last_modified,
+        system_kills,
+    })
+}
+
+fn get_last_modified_date(response: &Response) -> Option<DateTime<Utc>> {
     let last_modified: Option<DateTime<Utc>> = response
         .headers()
         .get("Last-Modified")
@@ -105,11 +114,7 @@ pub(crate) async fn get_system_kills(
                 .ok()
         })
         .map(|datetime| datetime.with_timezone(&Utc));
-    let system_kills = response.json().await?;
-    Ok(SystemKillsResponse {
-        last_modified,
-        system_kills,
-    })
+    last_modified
 }
 
 #[derive(Debug)]
@@ -129,18 +134,7 @@ pub(crate) async fn get_system_jumps(
 ) -> Result<SystemJumpsResponse, reqwest::Error> {
     let system_jumps_url = "https://esi.evetech.net/latest/universe/system_jumps/";
     let response = client.get(system_jumps_url).send().await?;
-    let last_modified: Option<DateTime<Utc>> = response
-        .headers()
-        .get("Last-Modified")
-        .unwrap()
-        .to_str()
-        .ok()
-        .and_then(|s| {
-            DateTime::parse_from_rfc2822(s)
-                .or_else(|_| DateTime::parse_from_rfc3339(s))
-                .ok()
-        })
-        .map(|datetime| datetime.with_timezone(&Utc));
+    let last_modified = get_last_modified_date(&response);
     let system_jumps = response.json().await?;
     Ok(SystemJumpsResponse {
         last_modified,
