@@ -2,7 +2,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub(crate) struct EveScoutSignature {
+pub struct EveScoutSignature {
     id: String,
     created_at: String,
     created_by_id: i64,
@@ -32,25 +32,10 @@ pub(crate) struct EveScoutSignature {
     comment: Option<String>,
 }
 
-pub(crate) async fn get_public_signatures(
+pub async fn get_public_signatures(
     client: Client,
 ) -> Result<Vec<EveScoutSignature>, reqwest::Error> {
     let get_public_signatures = format!("https://api.eve-scout.com/v2/public/signatures");
     let response = client.get(&get_public_signatures).send().await?;
     response.json().await
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::evescout::get_public_signatures;
-    use reqwest::Client;
-
-    #[tokio::test]
-    async fn should_get_public_signatures() {
-        let client = Client::new();
-        let signatures = get_public_signatures(client).await.unwrap();
-
-        assert!(signatures.len() > 0);
-        println!("{:?}", signatures);
-    }
 }

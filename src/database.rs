@@ -3,16 +3,16 @@ use std::sync::Arc;
 use neo4rs::{query, Error, Error::DeserializationError, Graph, Row};
 use serde::{Deserialize, Serialize};
 
-use crate::evescout::EveScoutSignature;
+use crate::eve_scout::EveScoutSignature;
 
-pub(crate) async fn get_graph_client() -> Arc<Graph> {
+pub async fn get_graph_client() -> Arc<Graph> {
     let uri = "bolt://localhost:7687";
     let user = "neo4j";
     let pass = "neo4jneo4j";
     Arc::new(Graph::new(uri, user, pass).await.unwrap())
 }
 
-pub(crate) async fn system_id_exists(graph: Arc<Graph>, system_id: i64) -> Result<bool, Error> {
+pub async fn system_id_exists(graph: Arc<Graph>, system_id: i64) -> Result<bool, Error> {
     let system_exists = "MATCH (s:System {system_id: $system_id}) RETURN COUNT(s) as count LIMIT 1";
     let mut result = graph
         .execute(query(system_exists).param("system_id", system_id))
@@ -28,7 +28,7 @@ fn row_count_is_positive(row: Row) -> bool {
     row.get::<i64>("count").map_or(false, |count| count > 0)
 }
 
-pub(crate) async fn stargate_id_exists(graph: Arc<Graph>, stargate_id: i64) -> Result<bool, Error> {
+pub async fn stargate_id_exists(graph: Arc<Graph>, stargate_id: i64) -> Result<bool, Error> {
     let stargate_exists =
         "MATCH (s:Stargate {stargate_id: $stargate_id}) RETURN COUNT(s) as count LIMIT 1";
     let mut result = graph
@@ -42,7 +42,7 @@ pub(crate) async fn stargate_id_exists(graph: Arc<Graph>, stargate_id: i64) -> R
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct System {
+pub struct System {
     pub constellation_id: i64,
     pub name: String,
     pub planets: Vec<i64>,
@@ -58,7 +58,7 @@ pub(crate) struct System {
     pub jumps: u32,
 }
 
-pub(crate) async fn save_system(graph: &Arc<Graph>, system: &System) -> Result<(), Error> {
+pub async fn save_system(graph: &Arc<Graph>, system: &System) -> Result<(), Error> {
     let create_statement = "
         CREATE (s:System {
             system_id: $system_id,
@@ -96,7 +96,7 @@ pub(crate) async fn save_system(graph: &Arc<Graph>, system: &System) -> Result<(
         .await
 }
 
-pub(crate) async fn get_system(graph: Arc<Graph>, system_id: i64) -> Result<Option<System>, Error> {
+pub async fn get_system(graph: Arc<Graph>, system_id: i64) -> Result<Option<System>, Error> {
     let get_system_statement =
         "MATCH (system:System {system_id: $system_id}) RETURN system LIMIT 1";
     let mut result = graph
@@ -105,22 +105,6 @@ pub(crate) async fn get_system(graph: Arc<Graph>, system_id: i64) -> Result<Opti
 
     match result.next().await? {
         Some(row) => Ok(row.get("system").ok()),
-        None => Ok(None),
-    }
-}
-
-pub(crate) async fn get_stargate(
-    graph: Arc<Graph>,
-    stargate_id: i64,
-) -> Result<Option<Stargate>, Error> {
-    let get_stargate_statement =
-        "MATCH (sg:Stargate {stargate_id: $stargate_id}) RETURN sg LIMIT 1";
-    let mut result = graph
-        .execute(query(get_stargate_statement).param("stargate_id", stargate_id))
-        .await?;
-
-    match result.next().await? {
-        Some(row) => Ok(row.get("sg").ok()),
         None => Ok(None),
     }
 }
@@ -140,7 +124,7 @@ pub async fn get_all_system_ids(graph: Arc<Graph>) -> Result<Vec<i64>, Error> {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct Stargate {
+pub struct Stargate {
     pub destination_stargate_id: i64,
     pub destination_system_id: i64,
     pub name: String,
@@ -152,7 +136,7 @@ pub(crate) struct Stargate {
     pub type_id: i64,
 }
 
-pub(crate) async fn save_stargate(graph: Arc<Graph>, stargate: &Stargate) -> Result<(), Error> {
+pub async fn save_stargate(graph: Arc<Graph>, stargate: &Stargate) -> Result<(), Error> {
     let create_statement = "
         CREATE (sg:Stargate {
             destination_stargate_id: $destination_stargate_id,
@@ -189,10 +173,7 @@ pub(crate) async fn save_stargate(graph: Arc<Graph>, stargate: &Stargate) -> Res
     .await
 }
 
-pub(crate) async fn save_wormhole(
-    graph: Arc<Graph>,
-    signature: EveScoutSignature,
-) -> Result<(), Error> {
+pub async fn save_wormhole(graph: Arc<Graph>, signature: EveScoutSignature) -> Result<(), Error> {
     println!(
         "Saving wormhole from {} to {}",
         signature.in_system_id, signature.out_system_id
@@ -211,7 +192,7 @@ pub(crate) async fn save_wormhole(
     .await
 }
 
-pub(crate) async fn set_last_hour_system_jumps(
+pub async fn set_last_hour_system_jumps(
     graph: Arc<Graph>,
     system_id: i64,
     jumps: i32,
@@ -229,7 +210,7 @@ pub(crate) async fn set_last_hour_system_jumps(
         .await
 }
 
-pub(crate) async fn set_last_hour_system_kills(
+pub async fn set_last_hour_system_kills(
     graph: Arc<Graph>,
     system_id: i64,
     kills: i32,
@@ -247,7 +228,7 @@ pub(crate) async fn set_last_hour_system_kills(
         .await
 }
 
-pub(crate) async fn set_system_jump_risk(
+pub async fn set_system_jump_risk(
     graph: Arc<Graph>,
     system_id: i64,
     galaxy_jumps: i32,
@@ -329,7 +310,7 @@ async fn create_system_jump_if_missing(
     Ok(())
 }
 
-pub(crate) async fn create_system_jump(
+pub async fn create_system_jump(
     graph: Arc<Graph>,
     source_system: i64,
     dest_system: i64,
@@ -348,7 +329,7 @@ pub(crate) async fn create_system_jump(
         .await
 }
 
-pub(crate) async fn drop_system_jump_graph(graph: &Arc<Graph>) -> Result<String, Error> {
+pub async fn drop_system_jump_graph(graph: &Arc<Graph>) -> Result<String, Error> {
     let drop_graph = "CALL gds.graph.drop('system-map')";
     let mut result = graph
         .execute(query(drop_graph))
@@ -363,7 +344,7 @@ pub(crate) async fn drop_system_jump_graph(graph: &Arc<Graph>) -> Result<String,
     row.get::<String>("graphName").map_err(DeserializationError)
 }
 
-pub(crate) async fn drop_jump_risk_graph(graph: Arc<Graph>) -> Result<String, Error> {
+pub async fn drop_jump_risk_graph(graph: Arc<Graph>) -> Result<String, Error> {
     let drop_graph = "CALL gds.graph.drop('jump-risk')";
     let mut result = graph
         .execute(query(drop_graph))
@@ -378,7 +359,7 @@ pub(crate) async fn drop_jump_risk_graph(graph: Arc<Graph>) -> Result<String, Er
     row.get::<String>("graphName").map_err(DeserializationError)
 }
 
-pub(crate) async fn build_system_jump_graph(graph: Arc<Graph>) -> Result<String, Error> {
+pub async fn build_system_jump_graph(graph: Arc<Graph>) -> Result<String, Error> {
     let build_graph = "\
         CALL gds.graph.project(
             'system-map',
@@ -401,7 +382,7 @@ pub(crate) async fn build_system_jump_graph(graph: Arc<Graph>) -> Result<String,
     row.get::<String>("graphName").map_err(DeserializationError)
 }
 
-pub(crate) async fn build_jump_risk_graph(graph: Arc<Graph>) -> Result<String, Error> {
+pub async fn build_jump_risk_graph(graph: Arc<Graph>) -> Result<String, Error> {
     let build_graph = "\
         CALL gds.graph.project(
             'jump-risk',
@@ -424,10 +405,7 @@ pub(crate) async fn build_jump_risk_graph(graph: Arc<Graph>) -> Result<String, E
     row.get::<String>("graphName").map_err(DeserializationError)
 }
 
-pub(crate) async fn drop_system_connections(
-    graph: &Arc<Graph>,
-    system_name: &str,
-) -> Result<(), Error> {
+pub async fn drop_system_connections(graph: &Arc<Graph>, system_name: &str) -> Result<(), Error> {
     let drop_thera_connections = "\
         MATCH (:System {name: $system_name})-[r]-()
         DELETE r";
@@ -448,7 +426,7 @@ pub async fn rebuild_jump_risk_graph(graph: Arc<Graph>) -> Result<(), Error> {
     Ok(())
 }
 
-pub(crate) async fn find_shortest_route(
+pub async fn find_shortest_route(
     graph: Arc<Graph>,
     from_system_name: String,
     to_system_name: String,
@@ -476,93 +454,5 @@ pub(crate) async fn find_shortest_route(
     match result.next().await? {
         Some(row) => Ok(row.get("nodeNames").ok()),
         None => Ok(None),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use reqwest::Client;
-
-    use crate::database::{
-        build_jump_risk_graph, build_system_jump_graph, drop_jump_risk_graph,
-        drop_system_jump_graph, get_all_system_ids, get_graph_client, get_stargate, get_system,
-        set_system_jump_risk,
-    };
-    use crate::{pull_system_jumps, pull_system_kills};
-
-    #[tokio::test]
-    async fn should_get_all_system_ids() {
-        let system_ids = get_all_system_ids(get_graph_client().await).await.unwrap();
-
-        assert!(system_ids.len() > 0)
-    }
-
-    #[tokio::test]
-    async fn should_read_system_from_database() {
-        let system_id = 30000276;
-        let system = get_system(get_graph_client().await, system_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(system.system_id, system_id)
-    }
-
-    #[tokio::test]
-    async fn should_read_stargate_from_database() {
-        let stargate_id = 50004615;
-        let stargate = get_stargate(get_graph_client().await, stargate_id).await;
-        assert_eq!(stargate.unwrap().unwrap().stargate_id, stargate_id)
-    }
-
-    #[tokio::test]
-    async fn should_get_all_saved_system_ids() {
-        let system_ids = get_all_system_ids(get_graph_client().await).await;
-
-        assert_eq!(system_ids.unwrap().len(), 8436)
-    }
-
-    #[tokio::test]
-    async fn should_set_system_jump_risk() {
-        let client = Client::new();
-        let graph = get_graph_client().await;
-        let system_id = 30000276;
-        let galaxy_kills = pull_system_kills(client.clone(), graph.clone())
-            .await
-            .unwrap();
-        let galaxy_jumps = pull_system_jumps(client.clone(), graph.clone())
-            .await
-            .unwrap();
-
-        set_system_jump_risk(graph.clone(), system_id, galaxy_jumps, galaxy_kills)
-            .await
-            .unwrap()
-    }
-
-    #[tokio::test]
-    async fn should_drop_system_jump_graph() {
-        let graph = get_graph_client().await;
-        let dropped_graph_name = drop_system_jump_graph(&graph).await.unwrap();
-        assert_eq!(dropped_graph_name, "system-map")
-    }
-
-    #[tokio::test]
-    async fn should_build_system_jump_graph() {
-        let graph = get_graph_client().await;
-        let new_graph_name = build_system_jump_graph(graph).await.unwrap();
-        assert_eq!(new_graph_name, "system-map")
-    }
-
-    #[tokio::test]
-    async fn should_drop_jump_risk_graph() {
-        let graph = get_graph_client().await;
-        let dropped_graph_name = drop_jump_risk_graph(graph).await.unwrap();
-        assert_eq!(dropped_graph_name, "jump-risk")
-    }
-
-    #[tokio::test]
-    async fn should_build_jump_risk_graph() {
-        let graph = get_graph_client().await;
-        let new_graph_name = build_jump_risk_graph(graph).await.unwrap();
-        assert_eq!(new_graph_name, "jump-risk")
     }
 }

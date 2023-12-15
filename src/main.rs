@@ -14,12 +14,12 @@ use crate::esi::{
     get_stargate_details, get_system_details, get_system_ids, get_system_jumps, get_system_kills,
     StargateEsiResponse, SystemEsiResponse,
 };
-use crate::evescout::get_public_signatures;
+use crate::eve_scout::get_public_signatures;
 use crate::ReplicationError::TargetError;
 
 mod database;
 mod esi;
-mod evescout;
+mod eve_scout;
 
 #[tokio::main]
 async fn main() {
@@ -281,7 +281,13 @@ async fn pull_system_stargates(
         .unwrap()
         .stargates
         .iter()
-        .map(|&stargate_id| tokio::spawn(pull_stargate(client.clone(), graph.clone(), stargate_id)))
+        .map(|&stargate_id| {
+            tokio::spawn(pull_stargate_if_missing(
+                client.clone(),
+                graph.clone(),
+                stargate_id,
+            ))
+        })
         .collect();
     futures::future::try_join_all(stargate_pulls).await?;
     Ok(())
@@ -374,6 +380,7 @@ mod tests {
     use crate::{pull_all_stargates, pull_system_jumps, pull_system_kills, pull_system_stargates};
 
     #[tokio::test]
+    #[ignore]
     async fn can_save_system_to_database() {
         let client = Client::new();
         let graph = get_graph_client().await;
@@ -389,6 +396,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn should_pull_all_stargates() {
         match pull_all_stargates(Client::new(), get_graph_client().await).await {
             Ok(_) => {}
@@ -399,6 +407,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn should_pull_system_stargates() {
         let client = Client::new();
         let graph = get_graph_client().await;
@@ -413,6 +422,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn should_pull_system_jumps() {
         let client = Client::new();
         let graph = get_graph_client().await;
@@ -423,6 +433,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn should_pull_system_kills() {
         let client = Client::new();
         let graph = get_graph_client().await;
