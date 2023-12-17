@@ -189,6 +189,7 @@ async fn pull_all_systems(client: Client, graph: Arc<Graph>) -> Result<(), Repli
     let system_pulls: Vec<_> = system_ids
         .iter()
         .map(|&system_id| {
+            println!("Spawning task to pull {} system if its missing", system_id);
             tokio::spawn(pull_system_if_missing(
                 client.clone(),
                 graph.clone(),
@@ -205,7 +206,12 @@ async fn pull_system_if_missing(
     graph: Arc<Graph>,
     system_id: i64,
 ) -> Result<(), ReplicationError> {
+    println!("Checking if system_id {} exists in the database", system_id);
     if !system_id_exists(graph.clone(), system_id).await? {
+        println!(
+            "System {} does not already exist in the database",
+            system_id
+        );
         pull_system(client, graph.clone(), system_id).await?
     }
     Ok(())
