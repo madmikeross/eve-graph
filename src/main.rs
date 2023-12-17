@@ -1,11 +1,12 @@
 use std::convert::Infallible;
 use std::sync::Arc;
 
-use neo4rs::Graph;
+use neo4rs::{Error, Graph};
 use reqwest::Client;
 use thiserror::Error;
-use tokio::task::JoinError;
+use tokio::task::{JoinError, JoinSet};
 use warp::hyper::StatusCode;
+use warp::reject::Reject;
 use warp::reply::json;
 use warp::{reply, Filter, Rejection, Reply};
 
@@ -139,7 +140,7 @@ async fn systems_refresh_handler(
     client: Client,
     graph: Arc<Graph>,
 ) -> Result<impl Reply, Rejection> {
-    pull_all_systems(client, graph).await.unwrap();
+    pull_all_systems(client, graph).await?;
     Ok(reply())
 }
 
@@ -186,18 +187,24 @@ async fn pull_all_stargates(client: Client, graph: Arc<Graph>) -> Result<(), Rep
 async fn pull_all_systems(client: Client, graph: Arc<Graph>) -> Result<(), ReplicationError> {
     let system_ids = get_system_ids(&client).await.unwrap();
     println!("Received {} system ids from ESI", system_ids.len());
-    let system_pulls: Vec<_> = system_ids
-        .iter()
-        .map(|&system_id| {
-            println!("Spawning task to pull {} system if its missing", system_id);
-            tokio::spawn(pull_system_if_missing(
-                client.clone(),
-                graph.clone(),
-                system_id,
-            ))
-        })
-        .collect();
-    futures::future::try_join_all(system_pulls).await?;
+
+    let mut set = JoinSet::new();
+
+    system_ids.iter().for_each(|&system_id| {
+        println!("Spawning task to pull {} system if its missing", system_id);
+        set.spawn(pull_system_if_missing(
+            client.clone(),
+            graph.clone(),
+            system_id,
+        ));
+    });
+
+    while let Some(res) = set.join_next().await {
+        if let Err(e) = res.unwrap() {
+            return Err(e);
+        }
+    }
+
     Ok(())
 }
 
@@ -207,14 +214,24 @@ async fn pull_system_if_missing(
     system_id: i64,
 ) -> Result<(), ReplicationError> {
     println!("Checking if system_id {} exists in the database", system_id);
-    if !system_id_exists(graph.clone(), system_id).await? {
-        println!(
-            "System {} does not already exist in the database",
-            system_id
-        );
-        pull_system(client, graph.clone(), system_id).await?
+    let result = system_id_exists(graph.clone(), system_id).await;
+
+    match result {
+        Ok(exists) => {
+            if exists {
+                println!(
+                    "System {} does not already exist in the database",
+                    system_id
+                );
+                pull_system(client, graph.clone(), system_id).await?;
+            }
+            Ok(())
+        }
+        Err(_) => {
+            println!("Error checking if system_id {} exists", system_id);
+            Err(TargetError(Error::ConnectionError))
+        }
     }
-    Ok(())
 }
 
 impl From<SystemEsiResponse> for System {
@@ -251,6 +268,8 @@ enum ReplicationError {
     #[error("failed to persist data to the target")]
     TargetError(#[from] neo4rs::Error),
 }
+
+impl Reject for ReplicationError {}
 
 async fn pull_system(
     client: Client,
