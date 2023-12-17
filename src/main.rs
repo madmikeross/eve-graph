@@ -23,6 +23,7 @@ mod eve_scout;
 
 #[tokio::main]
 async fn main() {
+    println!("Starting eve-graph");
     let client = Client::new();
     let graph = get_graph_client().await;
 
@@ -65,9 +66,8 @@ async fn main() {
         .or(stargates_routes)
         .recover(handle_rejection);
 
-    warp::serve(service_routes)
-        .run(([127, 0, 0, 1], 8008))
-        .await;
+    println!("Serving routes on 8008");
+    warp::serve(service_routes).run(([0, 0, 0, 0], 8008)).await;
 }
 
 fn with_client(client: Client) -> impl Filter<Extract = (Client,), Error = Infallible> + Clone {
