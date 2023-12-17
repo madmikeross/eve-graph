@@ -1,5 +1,15 @@
-FROM messense/rust-musl-cross:x86_64-musl as builder
+FROM messense/rust-musl-cross:x86_64-musl as chef
+RUN cargo install cargo-chef
 WORKDIR /eve-graph
+
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
+COPY --from=planner /eve-graph/recipe.json recipe.json
+# Build & cache deps
+RUN cargo chef cook --release --target x86_64-unknown-linux-musl --recipe-path recipe.json
 # Copy the source
 COPY . .
 # Build the app
