@@ -14,10 +14,12 @@ pub async fn get_graph_client() -> Arc<Graph> {
 
 pub async fn system_id_exists(graph: Arc<Graph>, system_id: i64) -> Result<bool, Error> {
     let system_exists = "MATCH (s:System {system_id: $system_id}) RETURN COUNT(s) as count LIMIT 1";
+    println!("Querying database for system_id {}", system_id);
     let mut result = graph
         .execute(query(system_exists).param("system_id", system_id))
         .await?;
 
+    println!("Matching query result");
     match result.next().await? {
         Some(row) => Ok(row_count_is_positive(row)),
         None => Ok(false),
