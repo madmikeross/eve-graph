@@ -185,6 +185,7 @@ async fn pull_all_stargates(client: Client, graph: Arc<Graph>) -> Result<(), Rep
 
 async fn pull_all_systems(client: Client, graph: Arc<Graph>) -> Result<(), ReplicationError> {
     let system_ids = get_system_ids(&client).await.unwrap();
+    println!("Received {} system ids from ESI", system_ids.len());
     let system_pulls: Vec<_> = system_ids
         .iter()
         .map(|&system_id| {
@@ -250,8 +251,10 @@ async fn pull_system(
     graph: Arc<Graph>,
     system_id: i64,
 ) -> Result<(), ReplicationError> {
+    println!("Getting system {} from ESI", system_id);
     let system_response = get_system_details(&client, system_id).await?;
     let system = System::from(system_response);
+    println!("Saving system {} to database", system_id);
     save_system(&graph, &system).await.map_err(TargetError)
 }
 
