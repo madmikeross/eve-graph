@@ -1,0 +1,21 @@
+version: '3'
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8008:8008"
+    depends_on:
+      - neo4j
+  neo4j:
+    image: neo4j:5.14-community-bullseye
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data/
+    environment:
+      - NEO4J_AUTH:neo4j/neo4jneo4j
+volumes:
+  neo4j_data:
