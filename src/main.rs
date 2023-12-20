@@ -26,7 +26,7 @@ mod eve_scout;
 async fn main() {
     println!("Starting eve-graph");
     let client = Client::new();
-    let graph = get_graph_client().await;
+    let graph = get_graph_client_with_retry(5).await.unwrap();
 
     let systems_refresh = warp::path!("systems" / "refresh");
     let systems_risk = warp::path!("systems" / "risk");
@@ -220,7 +220,7 @@ async fn pull_system_if_missing(
 
     match system_id_exists(graph.clone(), system_id).await {
         Ok(exists) => {
-            if exists {
+            if !exists {
                 println!(
                     "System {} does not already exist in the database",
                     system_id
@@ -332,7 +332,7 @@ async fn error_if_any_member_has_error<T: 'static>(
             return Some(Err(e));
         }
     }
-    None
+    Some(Ok(()))
 }
 
 async fn pull_system_kills(client: Client, graph: Arc<Graph>) -> Result<i32, ReplicationError> {
@@ -425,7 +425,7 @@ async fn pull_stargate(
 mod tests {
     use reqwest::Client;
 
-    use crate::database::{get_graph_client, save_system, System};
+    use crate::database::{get_graph_client_with_retry, save_system, System};
     use crate::esi::get_system_details;
     use crate::{pull_all_stargates, pull_system_jumps, pull_system_kills, pull_system_stargates};
 
@@ -433,7 +433,7 @@ mod tests {
     #[ignore]
     async fn can_save_system_to_database() {
         let client = Client::new();
-        let graph = get_graph_client().await;
+        let graph = get_graph_client_with_retry(1).await.unwrap();
         let system_id = 30000201;
         let system_response = get_system_details(&client, system_id).await.unwrap();
 
@@ -448,7 +448,8 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn should_pull_all_stargates() {
-        match pull_all_stargates(Client::new(), get_graph_client().await).await {
+        match pull_all_stargates(Client::new(), get_graph_client_with_retry(1).await.unwrap()).await
+        {
             Ok(_) => {}
             Err(_) => {
                 println!("failed to pull all stargates")
@@ -460,7 +461,7 @@ mod tests {
     #[ignore]
     async fn should_pull_system_stargates() {
         let client = Client::new();
-        let graph = get_graph_client().await;
+        let graph = get_graph_client_with_retry(1).await.unwrap();
         let system_id = 30000193;
 
         match pull_system_stargates(client.clone(), graph.clone(), system_id).await {
@@ -475,7 +476,7 @@ mod tests {
     #[ignore]
     async fn should_pull_system_jumps() {
         let client = Client::new();
-        let graph = get_graph_client().await;
+        let graph = get_graph_client_with_retry(1).await.unwrap();
 
         let total_jumps = pull_system_jumps(client, graph).await.unwrap();
 
@@ -486,7 +487,7 @@ mod tests {
     #[ignore]
     async fn should_pull_system_kills() {
         let client = Client::new();
-        let graph = get_graph_client().await;
+        let graph = get_graph_client_with_retry(1).await.unwrap();
 
         let total_kills = pull_system_kills(client, graph).await.unwrap();
 

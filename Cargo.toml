@@ -3,8 +3,6 @@ name = "eve-graph"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 reqwest = { version = "0.11", default-features = false, features = ["blocking", "json", "serde_json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
@@ -17,3 +15,4 @@ thiserror = "1.0.50"
 warp = "0.3.6"
 chrono = "0.4.31"
 openssl = { version = "0.10", features = ["vendored"] }
+time = "0.3.30"

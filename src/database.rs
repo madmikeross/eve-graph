@@ -1,15 +1,65 @@
 use std::sync::Arc;
+use std::time::Duration;
 
+use neo4rs::Error::ConnectionError;
 use neo4rs::{query, Error, Error::DeserializationError, Graph, Row};
 use serde::{Deserialize, Serialize};
 
 use crate::eve_scout::EveScoutSignature;
 
-pub async fn get_graph_client() -> Arc<Graph> {
-    let uri = "bolt://localhost:7687";
+pub async fn get_graph_client_with_retry(max_retries: usize) -> Result<Arc<Graph>, Error> {
+    let neo4j_container_name = "neo4j";
+    let uri = format!("bolt://{}:7687", neo4j_container_name);
     let user = "neo4j";
     let pass = "neo4jneo4j";
-    Arc::new(Graph::new(uri, user, pass).await.unwrap())
+
+    for attempt in 1..=max_retries {
+        println!("Trying to build a Neo4j graph client, attempt {}", attempt);
+        match Graph::new(uri.clone(), user, pass).await {
+            Ok(graph) => {
+                let graph = Arc::new(graph);
+                match check_neo4j_health(graph.clone()).await {
+                    Ok(_) => {
+                        println!("Successfully built a healthy Neo4j graph client");
+                        return Ok(graph);
+                    }
+                    Err(err) => {
+                        println!("Neo4j isn't ready yet: {}", err);
+                    }
+                };
+            }
+            Err(err) => println!("Failed to build a Neo4j graph client: {}", err),
+        };
+
+        let seconds = 5;
+        println!(
+            "Waiting {} seconds before trying to build another Neo4j graph client",
+            seconds
+        );
+        tokio::time::sleep(Duration::from_secs(seconds)).await;
+    }
+
+    println!(
+        "Failed to get graph client after max of {} attempts",
+        max_retries
+    );
+    Err(ConnectionError)
+}
+
+async fn check_neo4j_health(graph: Arc<Graph>) -> Result<(), Error> {
+    let test_query = "MATCH (n) RETURN n LIMIT 1";
+    let mut result = match graph.execute(query(test_query)).await {
+        Ok(row_stream) => row_stream,
+        Err(err) => {
+            return Err(ConnectionError);
+        }
+    };
+
+    // Any result means neo4j is responding
+    match result.next().await? {
+        None => Ok(()),
+        Some(_) => Ok(()),
+    }
 }
 
 pub async fn system_id_exists(graph: Arc<Graph>, system_id: i64) -> Result<bool, Error> {
@@ -17,9 +67,9 @@ pub async fn system_id_exists(graph: Arc<Graph>, system_id: i64) -> Result<bool,
     println!("Querying database for system_id {}", system_id);
     let mut result = graph
         .execute(query(system_exists).param("system_id", system_id))
-        .await?;
+        .await
+        .expect("Graph client failed to execute the system exists query");
 
-    println!("Matching query result");
     match result.next().await? {
         Some(row) => Ok(row_count_is_positive(row)),
         None => Ok(false),
