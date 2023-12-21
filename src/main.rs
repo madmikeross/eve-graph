@@ -148,7 +148,7 @@ async fn stargates_refresh_handler(
     client: Client,
     graph: Arc<Graph>,
 ) -> Result<impl Reply, Rejection> {
-    pull_all_stargates(client, graph).await.unwrap();
+    pull_all_stargates(client, graph).await?;
     Ok(reply())
 }
 
@@ -414,11 +414,18 @@ async fn pull_stargate(
     graph: Arc<Graph>,
     stargate_id: i64,
 ) -> Result<(), ReplicationError> {
-    let stargate_response = get_stargate_details(&client, stargate_id).await?;
-    let stargate = Stargate::from(stargate_response);
-    save_stargate(graph.clone(), &stargate)
-        .await
-        .map_err(TargetError)
+    match get_stargate_details(&client, stargate_id).await {
+        Ok(response) => {
+            let stargate = Stargate::from(response);
+            save_stargate(graph.clone(), &stargate)
+                .await
+                .map_err(TargetError)
+        }
+        Err(_) => {
+            println!("Failed to pull stargate {}", stargate_id);
+            Ok(()) // Temporarily allow this to not error so that other stargate pulls can succeed.
+        }
+    }
 }
 
 #[cfg(test)]

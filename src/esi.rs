@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use reqwest::{Client, Response};
+use reqwest::{Client, Error, Response};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
@@ -48,7 +48,7 @@ pub struct Destination {
 pub async fn get_system_details(
     client: &Client,
     system_id: i64,
-) -> Result<SystemEsiResponse, reqwest::Error> {
+) -> Result<SystemEsiResponse, Error> {
     let system_detail_url = format!(
         "https://esi.evetech.net/latest/universe/systems/{}",
         system_id
@@ -60,7 +60,7 @@ pub async fn get_system_details(
 pub async fn get_stargate_details(
     client: &Client,
     stargate_id: i64,
-) -> Result<StargateEsiResponse, reqwest::Error> {
+) -> Result<StargateEsiResponse, Error> {
     let stargate_url = format!(
         "https://esi.evetech.net/latest/universe/stargates/{}",
         stargate_id
@@ -69,7 +69,7 @@ pub async fn get_stargate_details(
     response.json().await
 }
 
-pub async fn get_system_ids(client: &Client) -> Result<Vec<i64>, reqwest::Error> {
+pub async fn get_system_ids(client: &Client) -> Result<Vec<i64>, Error> {
     let systems_url = "https://esi.evetech.net/latest/universe/systems/";
     let response = client.get(systems_url).send().await?;
     response.json().await
@@ -89,7 +89,7 @@ pub struct SystemKills {
     pub system_id: i64,
 }
 
-pub async fn get_system_kills(client: &Client) -> Result<SystemKillsResponse, reqwest::Error> {
+pub async fn get_system_kills(client: &Client) -> Result<SystemKillsResponse, Error> {
     let system_kills_url = "https://esi.evetech.net/latest/universe/system_kills/";
     let response = client.get(system_kills_url).send().await?;
     let last_modified = get_last_modified_date(&response);
@@ -128,7 +128,7 @@ pub struct SystemJumps {
     pub system_id: i64,
 }
 
-pub async fn get_system_jumps(client: &Client) -> Result<SystemJumpsResponse, reqwest::Error> {
+pub async fn get_system_jumps(client: &Client) -> Result<SystemJumpsResponse, Error> {
     let system_jumps_url = "https://esi.evetech.net/latest/universe/system_jumps/";
     let response = client.get(system_jumps_url).send().await?;
     let last_modified = get_last_modified_date(&response);
