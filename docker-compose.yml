@@ -9,13 +9,15 @@ services:
     depends_on:
       - neo4j
   neo4j:
-    image: neo4j:5.14-community-bullseye
+    image: neo4j:5.14.0-community-bullseye
     ports:
       - "7474:7474"
       - "7687:7687"
     volumes:
-      - neo4j_data:/data/
+      - neo4j_data:/data
+      - /var/lib/neo4j/plugins:/plugins
     environment:
       - NEO4J_AUTH:neo4j/neo4jneo4j
+      - NEO4J_PLUGINS:'["graph-data-science"]'
 volumes:
   neo4j_data:
