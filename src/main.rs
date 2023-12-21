@@ -13,7 +13,7 @@ use warp::{reply, Filter, Rejection, Reply};
 use crate::database::*;
 use crate::esi::{
     get_stargate_details, get_system_details, get_system_ids, get_system_jumps, get_system_kills,
-    StargateEsiResponse, SystemEsiResponse,
+    RequestError, StargateEsiResponse, SystemEsiResponse,
 };
 use crate::eve_scout::get_public_signatures;
 use crate::ReplicationError::TargetError;
@@ -263,8 +263,8 @@ impl From<SystemEsiResponse> for System {
 
 #[derive(Error, Debug)]
 enum ReplicationError {
-    #[error("failed to retrieve data from the source")]
-    SourceError(#[from] reqwest::Error),
+    #[error("failed to retrieve the data")]
+    SourceError(#[from] RequestError),
     #[error("failed to process the data")]
     ProcessError(#[from] JoinError),
     #[error("failed to persist data to the target")]

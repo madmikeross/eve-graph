@@ -1,6 +1,9 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
+use crate::esi::RequestError;
+use crate::esi::RequestError::HttpError;
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EveScoutSignature {
     id: String,
@@ -32,10 +35,8 @@ pub struct EveScoutSignature {
     comment: Option<String>,
 }
 
-pub async fn get_public_signatures(
-    client: Client,
-) -> Result<Vec<EveScoutSignature>, reqwest::Error> {
+pub async fn get_public_signatures(client: Client) -> Result<Vec<EveScoutSignature>, RequestError> {
     let get_public_signatures = format!("https://api.eve-scout.com/v2/public/signatures");
     let response = client.get(&get_public_signatures).send().await?;
-    response.json().await
+    response.json().await.map_err(HttpError)
 }
