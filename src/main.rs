@@ -112,11 +112,13 @@ async fn routes_to_handler(
     to_system_name: String,
     graph: Arc<Graph>,
 ) -> Result<impl Reply, Rejection> {
-    let route = find_shortest_route(graph, from_system_name, to_system_name)
+    match find_shortest_route(graph, from_system_name, to_system_name)
         .await
         .unwrap()
-        .unwrap();
-    Ok(json::<Vec<_>>(&route))
+    {
+        None => Ok(json::<String>(&String::from(""))),
+        Some(route) => Ok(json::<Vec<_>>(&route)),
+    }
 }
 
 async fn wormholes_refresh_handler(
