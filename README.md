@@ -16,23 +16,11 @@ plugin uses will need to be rebuilt, calling to refresh wormholes also refreshes
 refresh wormholes regularly).
 
 ### Finding the shortest route
-If you want to find the shortest route between two systems, say Cleyd and Jita, simply issue a get request to
-`127.0.0.1:8008/routes/Amarr/to/Jita` (can be done in a browser, with curl, or via Postman).
+If you want to find the shortest route between two systems, say Jita and Amarr, simply issue a get request to
+`localhost:8008/shortest-route/Jita/to/Amarr` (can be done in a browser, with curl, or via Postman).
 
 ### Finding a safe route
-In game, you can route via only high security systems, while this may seem safe, you can always be attacked in game.
-In addition to the shortest route, you can have eve_graph suggest a safe route based on how many kills have recently
-occurred in the system. Currently, this feature requires a bit of manual effort, but will become an endpoint soon.
-
-First, you need to already have built the database as above (systems, stargates, and wormholes). Then you need to call
-the endpoint to assign a risk to each jump:
-```bash
-curl -X POST 127.0.0.1:8008/systems/risk
-```
-
-Next, you need to build the `jump-risk` graph in neo4j. Refer to the `build_jump_risk_graph` function in the database
-module for the query you should run (run these queries in the Neo4j browser http://localhost:7474/browser/). Last, you
-need to run a query similar to the `find_shortest_route` function in the database module with a couple modifications in
-order to find the safest path. Simply substitute `jump-risk` for `system-map` and `risk` for `cost` (and put in your
-source and destination system names) and you should have a "safe" route which is also likely shorter than the high sec
-route.
+First you need to update the jump risks of each system by making a POST request to `localhost:8008/systems/risk`. This
+will fetch kills and jumps for all systems in the last hour, and use those values to assign a risk to jumping into each
+system. If you want to find a safe route between two systems, say Jita and Amarr, issue a get request to
+`127.0.0.1:8008/safest-route/Amarr/to/Jita`
