@@ -26,7 +26,7 @@ mod eve_scout;
 async fn main() {
     println!("Starting eve-graph");
     let client = Client::new();
-    let graph = get_graph_client_with_retry(5).await.unwrap();
+    let graph = get_graph_client_with_retry(10).await.unwrap();
 
     let systems_refresh = warp::path!("systems" / "refresh");
     let systems_risk = warp::path!("systems" / "risk");
@@ -128,13 +128,13 @@ async fn wormholes_refresh_handler(
     refresh_eve_scout_system_relations(client, graph.clone())
         .await
         .unwrap();
-    rebuild_jump_cost_graph(graph).await.unwrap();
+    refresh_jump_cost_graph(graph).await.unwrap();
     Ok(reply())
 }
 
 async fn systems_risk_handler(client: Client, graph: Arc<Graph>) -> Result<impl Reply, Rejection> {
-    pull_system_risk(client, graph.clone()).await.unwrap();
-    rebuild_jump_risk_graph(graph).await.unwrap();
+    refresh_jump_risks(client, graph.clone()).await?;
+    refresh_jump_risk_graph(graph).await.unwrap();
     Ok(reply())
 }
 
@@ -150,7 +150,8 @@ async fn stargates_refresh_handler(
     client: Client,
     graph: Arc<Graph>,
 ) -> Result<impl Reply, Rejection> {
-    pull_all_stargates(client, graph).await?;
+    pull_all_stargates(client, graph.clone()).await?;
+    refresh_jump_cost_graph(graph).await.unwrap();
     Ok(reply())
 }
 
@@ -358,7 +359,10 @@ async fn pull_system_kills(client: Client, graph: Arc<Graph>) -> Result<i32, Rep
         .map(|_| galaxy_kills)
 }
 
-async fn pull_system_jumps(client: Client, graph: Arc<Graph>) -> Result<i32, ReplicationError> {
+async fn pull_last_hour_of_jumps(
+    client: Client,
+    graph: Arc<Graph>,
+) -> Result<i32, ReplicationError> {
     let response = get_system_jumps(&client).await?;
     let galaxy_jumps: i32 = response.system_jumps.iter().map(|s| s.ship_jumps).sum();
 
@@ -379,9 +383,9 @@ async fn pull_system_jumps(client: Client, graph: Arc<Graph>) -> Result<i32, Rep
         .map(|_| galaxy_jumps)
 }
 
-async fn pull_system_risk(client: Client, graph: Arc<Graph>) -> Result<(), ReplicationError> {
+async fn refresh_jump_risks(client: Client, graph: Arc<Graph>) -> Result<(), ReplicationError> {
     let galaxy_kills = pull_system_kills(client.clone(), graph.clone()).await?;
-    let galaxy_jumps = pull_system_jumps(client.clone(), graph.clone()).await?;
+    let galaxy_jumps = pull_last_hour_of_jumps(client.clone(), graph.clone()).await?;
     let system_ids = get_all_system_ids(graph.clone()).await?;
     let mut set = JoinSet::new();
 
@@ -436,7 +440,9 @@ mod tests {
 
     use crate::database::{get_graph_client_with_retry, save_system, System};
     use crate::esi::get_system_details;
-    use crate::{pull_all_stargates, pull_system_jumps, pull_system_kills, pull_system_stargates};
+    use crate::{
+        pull_all_stargates, pull_last_hour_of_jumps, pull_system_kills, pull_system_stargates,
+    };
 
     #[tokio::test]
     #[ignore]
@@ -487,7 +493,7 @@ mod tests {
         let client = Client::new();
         let graph = get_graph_client_with_retry(1).await.unwrap();
 
-        let total_jumps = pull_system_jumps(client, graph).await.unwrap();
+        let total_jumps = pull_last_hour_of_jumps(client, graph).await.unwrap();
 
         assert!(total_jumps > 0)
     }

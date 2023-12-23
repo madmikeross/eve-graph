@@ -381,6 +381,22 @@ pub async fn create_system_jump(
         .await
 }
 
+pub async fn graph_exists(graph: &Arc<Graph>, graph_name: String) -> Result<bool, Error> {
+    let list_of_graphs_query = "CALL gds.graph.list";
+    let mut result = graph
+        .execute(query(list_of_graphs_query))
+        .await
+        .expect("Failed to get a list of gds graphs");
+
+    while let Some(row) = result.next().await? {
+        if row.get::<String>("graphName").unwrap() == graph_name {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
 pub async fn drop_system_jump_graph(graph: &Arc<Graph>) -> Result<String, Error> {
     let drop_graph = "CALL gds.graph.drop('system-map')";
     let mut result = graph
@@ -396,7 +412,7 @@ pub async fn drop_system_jump_graph(graph: &Arc<Graph>) -> Result<String, Error>
     row.get::<String>("graphName").map_err(DeserializationError)
 }
 
-pub async fn drop_jump_risk_graph(graph: Arc<Graph>) -> Result<String, Error> {
+pub async fn drop_jump_risk_graph(graph: &Arc<Graph>) -> Result<String, Error> {
     let drop_graph = "CALL gds.graph.drop('jump-risk')";
     let mut result = graph
         .execute(query(drop_graph))
@@ -466,14 +482,18 @@ pub async fn drop_system_connections(graph: &Arc<Graph>, system_name: &str) -> R
         .await
 }
 
-pub async fn rebuild_jump_cost_graph(graph: Arc<Graph>) -> Result<(), Error> {
-    drop_system_jump_graph(&graph).await?;
+pub async fn refresh_jump_cost_graph(graph: Arc<Graph>) -> Result<(), Error> {
+    if graph_exists(&graph, String::from("system-map")).await? {
+        drop_system_jump_graph(&graph).await?;
+    }
     let _ = build_system_jump_graph(graph).await?;
     Ok(())
 }
 
-pub async fn rebuild_jump_risk_graph(graph: Arc<Graph>) -> Result<(), Error> {
-    drop_jump_risk_graph(graph.clone()).await?;
+pub async fn refresh_jump_risk_graph(graph: Arc<Graph>) -> Result<(), Error> {
+    if graph_exists(&graph, String::from("jump-risk")).await? {
+        drop_jump_risk_graph(&graph).await?;
+    }
     let _ = build_jump_risk_graph(graph.clone()).await?;
     Ok(())
 }
