@@ -73,15 +73,22 @@ async fn main() {
         .or(stargates_routes)
         .recover(handle_rejection);
 
+    // Build or refresh all data
     match synchronize_esi_systems(client.clone(), graph.clone()).await {
         Ok(_) => {
             // Stargate sync relies on systems being saved
             match synchronize_esi_stargates(client.clone(), graph.clone()).await {
-                Ok(_) => {}
+                Ok(_) => {
+                    // Jump risk sync relies on connections existing from stargate sync
+                    refresh_jump_risks(client.clone(), graph.clone())
+                        .await
+                        .unwrap();
+                    refresh_jump_risk_graph(graph.clone()).await.unwrap();
+                }
                 Err(err) => println!("Stargate synchronization failed {}", err),
             }
 
-            refresh_eve_scout_system_relations(client, graph.clone())
+            refresh_eve_scout_system_relations(client.clone(), graph.clone())
                 .await
                 .unwrap();
             refresh_jump_cost_graph(graph).await.unwrap();
@@ -486,6 +493,7 @@ async fn pull_last_hour_of_jumps(
 }
 
 async fn refresh_jump_risks(client: Client, graph: Arc<Graph>) -> Result<(), ReplicationError> {
+    println!("Refreshing system jump risks");
     let galaxy_kills = pull_system_kills(client.clone(), graph.clone()).await?;
     let galaxy_jumps = pull_last_hour_of_jumps(client.clone(), graph.clone()).await?;
     let system_ids = get_all_system_ids(graph.clone()).await?;
