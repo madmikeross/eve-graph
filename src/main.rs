@@ -80,6 +80,11 @@ async fn main() {
                 Ok(_) => {}
                 Err(err) => println!("Stargate synchronization failed {}", err),
             }
+
+            refresh_eve_scout_system_relations(client, graph.clone())
+                .await
+                .unwrap();
+            refresh_jump_cost_graph(graph).await.unwrap();
         }
         Err(err) => println!("System synchronization failed {}", err),
     }
@@ -199,6 +204,7 @@ async fn refresh_eve_scout_system_relations(
     client: Client,
     graph: Arc<Graph>,
 ) -> Result<(), ReplicationError> {
+    println!("Refreshing EVE Scout Public Connections");
     drop_system_connections(&graph, "Thera").await?;
     drop_system_connections(&graph, "Turnur").await?;
 
