@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::convert::Infallible;
 use std::sync::Arc;
 
@@ -71,6 +72,17 @@ async fn main() {
         .or(systems_routes)
         .or(stargates_routes)
         .recover(handle_rejection);
+
+    match synchronize_esi_systems(client.clone(), graph.clone()).await {
+        Ok(_) => {
+            // Stargate sync relies on systems being saved
+            match synchronize_esi_stargates(client.clone(), graph.clone()).await {
+                Ok(_) => {}
+                Err(err) => println!("Stargate synchronization failed {}", err),
+            }
+        }
+        Err(err) => println!("System synchronization failed {}", err),
+    }
 
     println!("Serving routes on 8008");
     warp::serve(service_routes).run(([0, 0, 0, 0], 8008)).await;
@@ -207,6 +219,7 @@ async fn refresh_eve_scout_system_relations(
 }
 
 async fn pull_all_stargates(client: Client, graph: Arc<Graph>) -> Result<(), ReplicationError> {
+    println!("Pulling all stargates from ESI");
     let mut set = JoinSet::new();
 
     get_all_system_ids(graph.clone())
@@ -223,7 +236,74 @@ async fn pull_all_stargates(client: Client, graph: Arc<Graph>) -> Result<(), Rep
     error_if_any_member_has_error(&mut set).await.unwrap()
 }
 
+const EXPECTED_ESI_SYSTEM_COUNT: i64 = 8436;
+async fn synchronize_esi_systems(
+    client: Client,
+    graph: Arc<Graph>,
+) -> Result<(), ReplicationError> {
+    println!("Synchronizing systems with ESI");
+    let mut saved_count = get_saved_system_count(&graph).await?;
+    let max_attempts = 5;
+
+    for _attempt in 1..=max_attempts {
+        match saved_count.cmp(&EXPECTED_ESI_SYSTEM_COUNT) {
+            Ordering::Less => {
+                pull_all_systems(client.clone(), graph.clone()).await?;
+                saved_count = get_saved_system_count(&graph).await?;
+            }
+            Ordering::Equal => {
+                println!("Systems synchronized");
+                return Ok(());
+            }
+            Ordering::Greater => {
+                println!("Database has more systems than expected, removing any duplicates");
+                remove_duplicate_systems(graph.clone()).await?;
+            }
+        }
+    }
+
+    println!(
+        "Failed to synchronize saved system count {} to expected count {}",
+        saved_count, EXPECTED_ESI_SYSTEM_COUNT
+    );
+    Ok(())
+}
+
+const EXPECTED_ESI_STARGATE_COUNT: i64 = 13776;
+async fn synchronize_esi_stargates(
+    client: Client,
+    graph: Arc<Graph>,
+) -> Result<(), ReplicationError> {
+    println!("Synchronizing stargates with ESI");
+    let mut saved_count = get_saved_stargate_count(&graph).await?;
+    let max_attempts = 5;
+
+    for _attempt in 1..=max_attempts {
+        match saved_count.cmp(&EXPECTED_ESI_STARGATE_COUNT) {
+            Ordering::Less => {
+                pull_all_stargates(client.clone(), graph.clone()).await?;
+                saved_count = get_saved_stargate_count(&graph).await?;
+            }
+            Ordering::Equal => {
+                println!("Stargates synchronized");
+                return Ok(());
+            }
+            Ordering::Greater => {
+                println!("Database has more stargates than expected, removing any duplicates");
+                remove_duplicate_stargates(graph.clone()).await?;
+            }
+        }
+    }
+
+    println!(
+        "Failed to synchronize saved stargate count {} to expected count {}",
+        saved_count, EXPECTED_ESI_STARGATE_COUNT
+    );
+    Ok(())
+}
+
 async fn pull_all_systems(client: Client, graph: Arc<Graph>) -> Result<(), ReplicationError> {
+    println!("Pulling all systems from ESI");
     let mut set = JoinSet::new();
 
     get_system_ids(&client)
@@ -231,7 +311,6 @@ async fn pull_all_systems(client: Client, graph: Arc<Graph>) -> Result<(), Repli
         .unwrap()
         .iter()
         .for_each(|&system_id| {
-            println!("Spawning task to pull {} system if its missing", system_id);
             set.spawn(pull_system_if_missing(
                 client.clone(),
                 graph.clone(),
@@ -247,23 +326,14 @@ async fn pull_system_if_missing(
     graph: Arc<Graph>,
     system_id: i64,
 ) -> Result<(), ReplicationError> {
-    println!("Checking if system_id {} exists in the database", system_id);
-
     match system_id_exists(graph.clone(), system_id).await {
         Ok(exists) => {
             if !exists {
-                println!(
-                    "System {} does not already exist in the database",
-                    system_id
-                );
                 pull_system(client, graph.clone(), system_id).await?;
             }
             Ok(())
         }
-        Err(_) => {
-            println!("Error checking if system_id {} exists", system_id);
-            Err(TargetError(Error::ConnectionError))
-        }
+        Err(_) => Err(TargetError(Error::ConnectionError)),
     }
 }
 
@@ -309,10 +379,8 @@ async fn pull_system(
     graph: Arc<Graph>,
     system_id: i64,
 ) -> Result<(), ReplicationError> {
-    println!("Getting system {} from ESI", system_id);
     let system_response = get_system_details(&client, system_id).await?;
     let system = System::from(system_response);
-    println!("Saving system {} to database", system_id);
     save_system(&graph, &system).await.map_err(TargetError)
 }
 

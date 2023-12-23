@@ -8,39 +8,33 @@ use serde::{Deserialize, Serialize};
 use crate::eve_scout::EveScoutSignature;
 
 pub async fn get_graph_client_with_retry(max_retries: usize) -> Result<Arc<Graph>, Error> {
+    println!("Connecting to Neo4j");
     let neo4j_container_name = "neo4j";
     let uri = format!("bolt://{}:7687", neo4j_container_name);
     let user = "neo4j";
     let pass = "neo4jneo4j";
 
-    for attempt in 1..=max_retries {
-        println!("Trying to build a Neo4j graph client, attempt {}", attempt);
+    for _attempt in 1..=max_retries {
         match Graph::new(uri.clone(), user, pass).await {
             Ok(graph) => {
                 let graph = Arc::new(graph);
                 match check_neo4j_health(graph.clone()).await {
                     Ok(_) => {
-                        println!("Successfully built a healthy Neo4j graph client");
+                        println!("Connected to Neo4j");
                         return Ok(graph);
                     }
-                    Err(err) => {
-                        println!("Neo4j isn't ready yet: {}", err);
-                    }
+                    Err(err) => {}
                 };
             }
-            Err(err) => println!("Failed to build a Neo4j graph client: {}", err),
+            Err(err) => {}
         };
 
         let seconds = 5;
-        println!(
-            "Waiting {} seconds before trying to build another Neo4j graph client",
-            seconds
-        );
         tokio::time::sleep(Duration::from_secs(seconds)).await;
     }
 
     println!(
-        "Failed to get graph client after max of {} attempts",
+        "Failed to connect to Neo4j after the allowed {} attempts",
         max_retries
     );
     Err(ConnectionError)
@@ -50,7 +44,7 @@ async fn check_neo4j_health(graph: Arc<Graph>) -> Result<(), Error> {
     let test_query = "MATCH (n) RETURN n LIMIT 1";
     let mut result = match graph.execute(query(test_query)).await {
         Ok(row_stream) => row_stream,
-        Err(err) => {
+        Err(_err) => {
             return Err(ConnectionError);
         }
     };
@@ -173,6 +167,27 @@ pub async fn get_all_system_ids(graph: Arc<Graph>) -> Result<Vec<i64>, Error> {
     }
 
     Ok(system_ids)
+}
+
+pub async fn get_saved_system_count(graph: &Arc<Graph>) -> Result<i64, Error> {
+    let get_system_count = "MATCH (s:System) RETURN COUNT(s) as count";
+    let mut result = graph.execute(query(get_system_count)).await?;
+    let row = result.next().await?;
+
+    match row {
+        None => Ok(0),
+        Some(row) => row.get::<i64>("count").map_err(DeserializationError),
+    }
+}
+pub async fn get_saved_stargate_count(graph: &Arc<Graph>) -> Result<i64, Error> {
+    let get_stargate_count = "MATCH (sg:Stargate) RETURN COUNT(sg) as count";
+    let mut result = graph.execute(query(get_stargate_count)).await?;
+    let row = result.next().await?;
+
+    match row {
+        None => Ok(0),
+        Some(row) => row.get::<i64>("count").map_err(DeserializationError),
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -558,4 +573,24 @@ pub async fn find_safest_route(
         Some(row) => Ok(row.get("nodeNames").ok()),
         None => Ok(None),
     }
+}
+
+pub async fn remove_duplicate_systems(graph: Arc<Graph>) -> Result<(), Error> {
+    let remove_duplicates = "
+        MATCH (s:System)
+        WITH s.system_id AS systemId, COLLECT(s) AS duplicates, COUNT(*) AS count
+        WHERE count > 1
+        FOREACH (duplicate IN TAIL(duplicates) | DETACH DELETE duplicate)";
+
+    graph.run(query(remove_duplicates)).await
+}
+
+pub async fn remove_duplicate_stargates(graph: Arc<Graph>) -> Result<(), Error> {
+    let remove_duplicates = "
+        MATCH (s:Stargate)
+        WITH s.stargate_id AS stargateId, COLLECT(s) AS duplicates, COUNT(*) AS count
+        WHERE count > 1
+        FOREACH (duplicate IN TAIL(duplicates) | DETACH DELETE duplicate)";
+
+    graph.run(query(remove_duplicates)).await
 }

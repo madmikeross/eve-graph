@@ -6,11 +6,14 @@ An application for finding optimal routes between systems in EVE Online.
 Make sure you have Docker engine installed, then run `docker compose up`. This should build a container for Neo4j,
 install the graph-data-science plugin, and also build a container for the eve-graph app.
 
+On start, eve-graph will attempt to synchronize systems and stargates with ESI before accepting requests. If routing
+isn't working properly, inspect the logs for the api container.
+
 ### Collecting data
-You need to exercise the system refresh, stargate refresh, and wormhole refresh endpoints to hydrate the database
-with data on first run. Also, every time you restart the database, the in memory "graph" of data that the gds plugin
-uses will need to be rebuilt, calling to refresh wormholes also refreshes this "graph" (and you should call to refresh
-wormholes regularly).
+When you first start eve-graph, you will need to exercise the wormhole refresh endpoint to hydrate the database 
+ephemeral J-space connections. Also, every time you restart the database, the in memory "graph" of data that the gds 
+plugin uses will need to be rebuilt, calling to refresh wormholes also refreshes this "graph" (and you should call to 
+refresh wormholes regularly).
 
 ### Finding the shortest route
 If you want to find the shortest route between two systems, say Cleyd and Jita, simply issue a get request to
