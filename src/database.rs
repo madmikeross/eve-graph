@@ -528,3 +528,34 @@ pub async fn find_shortest_route(
         None => Ok(None),
     }
 }
+
+pub async fn find_safest_route(
+    graph: Arc<Graph>,
+    from_system_name: String,
+    to_system_name: String,
+) -> Result<Option<Vec<String>>, Error> {
+    let shortest_path_query = "\
+        MATCH (source:System {name: $from_system_name}), (target:System {name: $to_system_name})
+        CALL gds.shortestPath.dijkstra.stream('jump-risk', {
+            sourceNode: source,
+            targetNode: target,
+            relationshipWeightProperty: 'risk'
+        })
+        YIELD index, sourceNode, targetNode, totalCost, nodeIds, costs, path
+        RETURN
+            [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
+    ";
+
+    let mut result = graph
+        .execute(
+            query(shortest_path_query)
+                .param("from_system_name", from_system_name)
+                .param("to_system_name", to_system_name),
+        )
+        .await?;
+
+    match result.next().await? {
+        Some(row) => Ok(row.get("nodeNames").ok()),
+        None => Ok(None),
+    }
+}

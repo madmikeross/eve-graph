@@ -55,11 +55,16 @@ async fn main() {
         .and(with_graph(graph.clone()))
         .and_then(wormholes_refresh_handler);
 
-    let routes_to = warp::path!("routes" / String / "to" / String);
-    let routes_routes = routes_to
+    let shortest_route_to = warp::path!("shortest-route" / String / "to" / String);
+    let safest_route_to = warp::path!("safest-route" / String / "to" / String);
+    let routes_routes = shortest_route_to
         .and(warp::get())
         .and(with_graph(graph.clone()))
-        .and_then(routes_to_handler);
+        .and_then(shortest_route_to_handler)
+        .or(safest_route_to
+            .and(warp::get())
+            .and(with_graph(graph.clone()))
+            .and_then(safest_route_to_handler));
 
     let service_routes = routes_routes
         .or(wormholes_routes)
@@ -107,12 +112,35 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
     ))
 }
 
-async fn routes_to_handler(
+async fn shortest_route_to_handler(
     from_system_name: String,
     to_system_name: String,
     graph: Arc<Graph>,
 ) -> Result<impl Reply, Rejection> {
     match find_shortest_route(graph, from_system_name, to_system_name)
+        .await
+        .unwrap()
+    {
+        None => Ok(json::<String>(&String::from(""))),
+        Some(route) => Ok(json::<Vec<_>>(&route)),
+    }
+}
+
+async fn safest_route_to_handler(
+    from_system_name: String,
+    to_system_name: String,
+    graph: Arc<Graph>,
+) -> Result<impl Reply, Rejection> {
+    let exists = graph_exists(&graph, String::from("jump-risk"))
+        .await
+        .map_err(TargetError);
+    if !exists.unwrap() {
+        let _ = build_jump_risk_graph(graph.clone())
+            .await
+            .map_err(TargetError);
+    }
+
+    match find_safest_route(graph, from_system_name, to_system_name)
         .await
         .unwrap()
     {
