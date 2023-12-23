@@ -28,7 +28,8 @@ curl -X POST 127.0.0.1:8008/systems/risk
 ```
 
 Next, you need to build the `jump-risk` graph in neo4j. Refer to the `build_jump_risk_graph` function in the database
-module for the query you should run. Last, you need to run a query similar to the `find_shortest_route` function in the
-database module with a couple modifications in order to find the safest path. Simply substitute `jump-risk` for
-`system-map` and `risk` for `cost` (and put in your source and destination system names) and you should have a "safe" route
-which is also likely shorter than the high sec route.
+module for the query you should run (run these queries in the Neo4j browser http://localhost:7474/browser/). Last, you
+need to run a query similar to the `find_shortest_route` function in the database module with a couple modifications in
+order to find the safest path. Simply substitute `jump-risk` for `system-map` and `risk` for `cost` (and put in your
+source and destination system names) and you should have a "safe" route which is also likely shorter than the high sec
+route.
