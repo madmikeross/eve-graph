@@ -42,7 +42,7 @@ async fn should_create_system_jump_graph() {
 #[ignore]
 async fn should_drop_jump_risk_graph() {
     let graph = get_graph_client_with_retry(1).await.unwrap();
-    let dropped_graph_name = drop_jump_risk_graph(graph).await.unwrap();
+    let dropped_graph_name = drop_jump_risk_graph(&graph).await.unwrap();
     assert_eq!(dropped_graph_name, "jump-risk")
 }
 
