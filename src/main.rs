@@ -273,7 +273,7 @@ async fn synchronize_esi_systems(
     // 1. Get all system IDs from ESI (source of truth)
     let esi_system_ids = get_system_ids(&client)
         .await
-        .map_err(|e| ReplicationError::Source(RequestError::HttpError(e)))?;
+        .map_err(ReplicationError::Source)?;
     let esi_system_ids_set: std::collections::HashSet<i64> = esi_system_ids.into_iter().collect();
 
     // 2. Get all system IDs from our DB
@@ -437,12 +437,12 @@ async fn error_if_any_member_has_error<T: 'static>(
 }
 
 async fn pull_system_kills(client: Client, graph: Arc<Graph>) -> Result<i32, ReplicationError> {
-    let response = get_system_kills(&client).await?;
-    let galaxy_kills: i32 = response.system_kills.iter().map(|s| s.ship_kills).sum();
+    let system_kills = get_system_kills(&client).await?;
+    let galaxy_kills: i32 = system_kills.iter().map(|s| s.ship_kills).sum();
 
     let mut set = JoinSet::new();
 
-    response.system_kills.iter().for_each(|system_kill| {
+    system_kills.iter().for_each(|system_kill| {
         set.spawn(set_last_hour_system_kills(
             graph.clone(),
             system_kill.system_id,
@@ -461,12 +461,12 @@ async fn pull_last_hour_of_jumps(
     client: Client,
     graph: Arc<Graph>,
 ) -> Result<i32, ReplicationError> {
-    let response = get_system_jumps(&client).await?;
-    let galaxy_jumps: i32 = response.system_jumps.iter().map(|s| s.ship_jumps).sum();
+    let system_jumps = get_system_jumps(&client).await?;
+    let galaxy_jumps: i32 = system_jumps.iter().map(|s| s.ship_jumps).sum();
 
     let mut set = JoinSet::new();
 
-    response.system_jumps.iter().for_each(|system_jump| {
+    system_jumps.iter().for_each(|system_jump| {
         set.spawn(set_last_hour_system_jumps(
             graph.clone(),
             system_jump.system_id,
@@ -516,10 +516,24 @@ async fn pull_stargate(
                 .await
                 .map_err(Target)
         }
-        Err(err) => {
-            error!(error = %err, "Failed to pull stargate details. Skipping.");
-            Ok(()) // Temporarily allow this to not error so that other stargate pulls can succeed.
-        }
+        Err(err) => match err {
+            RequestError::NotFound { .. } => {
+                // This can happen if a stargate was removed from ESI. It's safe to ignore.
+                info!(error = %err, "Stargate not found, likely removed from ESI. Skipping.");
+                Ok(())
+            }
+            RequestError::RateLimited { .. } => {
+                // This is a critical error. We should stop the entire process.
+                // Propagate the error up.
+                error!(error = %err, "Rate limited by ESI. Aborting stargate pull.");
+                Err(ReplicationError::Source(err))
+            }
+            _ => {
+                // For other errors (server errors, unexpected issues), log it and skip this one.
+                error!(error = %err, "Failed to pull stargate details. Skipping.");
+                Ok(())
+            }
+        },
     }
 }
 

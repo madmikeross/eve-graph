@@ -2,10 +2,8 @@ use reqwest::{Client, Error, Response};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
-use warp::http;
 
 use crate::esi::RequestError::HttpError;
-use crate::esi::RequestError::ParseError;
 
 #[derive(Debug, Deserialize)]
 pub struct SystemEsiResponse {
@@ -61,10 +59,18 @@ pub async fn get_system_details(
 
 #[derive(Error, Debug)]
 pub enum RequestError {
-    #[error("failed to retrieve data from the source")]
+    #[error("Request failed: {0}")]
     HttpError(#[from] Error),
-    #[error("failed to parse data")]
+    #[error("Failed to parse response body: {0}")]
     ParseError(#[from] serde_json::Error),
+    #[error("Rate limited by ESI: {body}")]
+    RateLimited { body: String },
+    #[error("Resource not found (404): {body}")]
+    NotFound { body: String },
+    #[error("ESI server error ({status}): {body}")]
+    ServerError { status: u16, body: String },
+    #[error("Unexpected ESI error ({status}): {body}")]
+    UnexpectedError { status: u16, body: String },
 }
 
 pub async fn get_stargate_details(
@@ -72,41 +78,14 @@ pub async fn get_stargate_details(
     stargate_id: i64,
 ) -> Result<StargateEsiResponse, RequestError> {
     let stargate_url = format!("https://esi.evetech.net/latest/universe/stargates/{stargate_id}");
-    let response = client.get(&stargate_url).send().await?;
-    let status_code = response.status();
-
-    // Manually implement response.json so we can preserve bytes if we need to understand the error
-    let response_bytes = response.bytes().await?;
-    match serde_json::from_slice::<StargateEsiResponse>(&response_bytes).map_err(ParseError) {
-        Ok(parsed_stargate) => Ok(parsed_stargate),
-        Err(err) => {
-            // Rebuild a response so we can print the text
-            let response = Response::from(
-                http::Response::builder()
-                    .status(status_code)
-                    .body(response_bytes)
-                    .expect("Failed to rebuild response"),
-            );
-            error!(
-                "{} {}: {}",
-                status_code,
-                stargate_url,
-                response.text().await.unwrap()
-            );
-            Err(err)
-        }
-    }
+    let response = client.get(stargate_url).send().await?;
+    process_response(response).await
 }
 
-pub async fn get_system_ids(client: &Client) -> Result<Vec<i64>, Error> {
+pub async fn get_system_ids(client: &Client) -> Result<Vec<i64>, RequestError> {
     let systems_url = "https://esi.evetech.net/latest/universe/systems/";
     let response = client.get(systems_url).send().await?;
-    response.json().await
-}
-
-#[derive(Debug)]
-pub struct SystemKillsResponse {
-    pub system_kills: Vec<SystemKills>,
+    process_response(response).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -115,16 +94,10 @@ pub struct SystemKills {
     pub system_id: i64,
 }
 
-pub async fn get_system_kills(client: &Client) -> Result<SystemKillsResponse, RequestError> {
+pub async fn get_system_kills(client: &Client) -> Result<Vec<SystemKills>, RequestError> {
     let system_kills_url = "https://esi.evetech.net/latest/universe/system_kills/";
     let response = client.get(system_kills_url).send().await?;
-    let system_kills = response.json().await?;
-    Ok(SystemKillsResponse { system_kills })
-}
-
-#[derive(Debug)]
-pub struct SystemJumpsResponse {
-    pub system_jumps: Vec<SystemJumps>,
+    process_response(response).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -133,9 +106,41 @@ pub struct SystemJumps {
     pub system_id: i64,
 }
 
-pub async fn get_system_jumps(client: &Client) -> Result<SystemJumpsResponse, RequestError> {
+pub async fn get_system_jumps(client: &Client) -> Result<Vec<SystemJumps>, RequestError> {
     let system_jumps_url = "https://esi.evetech.net/latest/universe/system_jumps/";
     let response = client.get(system_jumps_url).send().await?;
-    let system_jumps = response.json().await?;
-    Ok(SystemJumpsResponse { system_jumps })
+    process_response(response).await
+}
+
+async fn process_response<T: for<'de> Deserialize<'de>>(
+    response: Response,
+) -> Result<T, RequestError> {
+    let status = response.status();
+    let url = response.url().clone();
+
+    if status.is_success() {
+        return response.json::<T>().await.map_err(HttpError);
+    }
+
+    let body = response
+        .text()
+        .await
+        .unwrap_or_else(|_| "Could not read error body".to_string());
+    error!(
+        "ESI request to {} failed with status {}: {}",
+        url, status, body
+    );
+
+    match status.as_u16() {
+        404 => Err(RequestError::NotFound { body }),
+        420 | 429 => Err(RequestError::RateLimited { body }),
+        500..=599 => Err(RequestError::ServerError {
+            status: status.as_u16(),
+            body,
+        }),
+        _ => Err(RequestError::UnexpectedError {
+            status: status.as_u16(),
+            body,
+        }),
+    }
 }
