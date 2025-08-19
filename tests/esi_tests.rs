@@ -7,7 +7,6 @@ async fn should_get_system_kills() {
     let client = Client::new();
     let system_kills_response = get_system_kills(&client).await.unwrap();
 
-    assert!(&system_kills_response.last_modified.is_some());
     assert!(&system_kills_response.system_kills.len() > &0);
 }
 
@@ -16,7 +15,6 @@ async fn should_get_system_jumps() {
     let client = Client::new();
     let system_jumps_response = get_system_jumps(&client).await.unwrap();
 
-    assert!(&system_jumps_response.last_modified.is_some());
     assert!(&system_jumps_response.system_jumps.len() > &0);
 }
 

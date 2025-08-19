@@ -9,10 +9,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1.0"
 neo4rs = "0.7.0-rc.3"
 tokio = { version = "1", features = ["full"] }
-futures = "0.3.29"
-uuid = "1.6.0"
 thiserror = "1.0.50"
 warp = "0.3.6"
 chrono = "0.4.31"
-openssl = { version = "0.10", features = ["vendored"] }
-time = "0.3.30"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }

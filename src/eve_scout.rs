@@ -36,7 +36,7 @@ pub struct EveScoutSignature {
 }
 
 pub async fn get_public_signatures(client: Client) -> Result<Vec<EveScoutSignature>, RequestError> {
-    let get_public_signatures = format!("https://api.eve-scout.com/v2/public/signatures");
-    let response = client.get(&get_public_signatures).send().await?;
+    let get_public_signatures = "https://api.eve-scout.com/v2/public/signatures";
+    let response = client.get(get_public_signatures).send().await?;
     response.json().await.map_err(HttpError)
 }

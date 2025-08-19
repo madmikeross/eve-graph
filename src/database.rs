@@ -1,16 +1,16 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::eve_scout::EveScoutSignature;
 use neo4rs::Error::ConnectionError;
 use neo4rs::{query, Error, Error::DeserializationError, Graph, Row};
 use serde::{Deserialize, Serialize};
-
-use crate::eve_scout::EveScoutSignature;
+use tracing::{debug, error, info, warn};
 
 pub async fn get_graph_client_with_retry(max_retries: usize) -> Result<Arc<Graph>, Error> {
-    println!("Connecting to Neo4j");
+    info!("Connecting to Neo4j");
     let neo4j_container_name = "neo4j";
-    let uri = format!("bolt://{}:7687", neo4j_container_name);
+    let uri = format!("bolt://{neo4j_container_name}:7687");
     let user = "neo4j";
     let pass = "neo4jneo4j";
 
@@ -20,23 +20,20 @@ pub async fn get_graph_client_with_retry(max_retries: usize) -> Result<Arc<Graph
                 let graph = Arc::new(graph);
                 match check_neo4j_health(graph.clone()).await {
                     Ok(_) => {
-                        println!("Connected to Neo4j");
+                        info!("Connected to Neo4j");
                         return Ok(graph);
                     }
-                    Err(err) => {}
+                    Err(_err) => {}
                 };
             }
-            Err(err) => {}
+            Err(_err) => {}
         };
 
         let seconds = 5;
         tokio::time::sleep(Duration::from_secs(seconds)).await;
     }
 
-    println!(
-        "Failed to connect to Neo4j after the allowed {} attempts",
-        max_retries
-    );
+    error!("Failed to connect to Neo4j after the allowed {max_retries} attempts");
     Err(ConnectionError)
 }
 
@@ -56,22 +53,8 @@ async fn check_neo4j_health(graph: Arc<Graph>) -> Result<(), Error> {
     }
 }
 
-pub async fn system_id_exists(graph: Arc<Graph>, system_id: i64) -> Result<bool, Error> {
-    let system_exists = "MATCH (s:System {system_id: $system_id}) RETURN COUNT(s) as count LIMIT 1";
-    println!("Querying database for system_id {}", system_id);
-    let mut result = graph
-        .execute(query(system_exists).param("system_id", system_id))
-        .await
-        .expect("Graph client failed to execute the system exists query");
-
-    match result.next().await? {
-        Some(row) => Ok(row_count_is_positive(row)),
-        None => Ok(false),
-    }
-}
-
 fn row_count_is_positive(row: Row) -> bool {
-    row.get::<i64>("count").map_or(false, |count| count > 0)
+    row.get::<i64>("count").is_ok_and(|count| count > 0)
 }
 
 pub async fn stargate_id_exists(graph: Arc<Graph>, stargate_id: i64) -> Result<bool, Error> {
@@ -124,7 +107,7 @@ pub async fn save_system(graph: &Arc<Graph>, system: &System) -> Result<(), Erro
 
     graph
         .run(
-            query(&create_statement)
+            query(create_statement)
                 .param("system_id", system.system_id)
                 .param("name", system.name.clone())
                 .param("constellation_id", system.constellation_id)
@@ -153,6 +136,20 @@ pub async fn get_system(graph: Arc<Graph>, system_id: i64) -> Result<Option<Syst
         Some(row) => Ok(row.get("system").ok()),
         None => Ok(None),
     }
+}
+
+pub async fn get_all_systems(graph: Arc<Graph>) -> Result<Vec<System>, Error> {
+    let get_all_systems_statement = "MATCH (s:System) RETURN s as system";
+    let mut result = graph.execute(query(get_all_systems_statement)).await?;
+    let mut systems = Vec::new();
+
+    while let Some(row) = result.next().await? {
+        if let Ok(system) = row.get("system") {
+            systems.push(system);
+        }
+    }
+
+    Ok(systems)
 }
 
 pub async fn get_all_system_ids(graph: Arc<Graph>) -> Result<Vec<i64>, Error> {
@@ -219,7 +216,7 @@ pub async fn save_stargate(graph: Arc<Graph>, stargate: &Stargate) -> Result<(),
 
     graph
         .run(
-            query(&create_statement)
+            query(create_statement)
                 .param("destination_stargate_id", stargate.destination_stargate_id)
                 .param("destination_system_id", stargate.destination_system_id)
                 .param("name", stargate.name.clone())
@@ -241,20 +238,20 @@ pub async fn save_stargate(graph: Arc<Graph>, stargate: &Stargate) -> Result<(),
 }
 
 pub async fn save_wormhole(graph: Arc<Graph>, signature: EveScoutSignature) -> Result<(), Error> {
-    println!(
+    debug!(
         "Saving wormhole from {} to {}",
         signature.in_system_id, signature.out_system_id
     );
     create_system_jump(
         graph.clone(),
-        signature.in_system_id.clone(),
-        signature.out_system_id.clone(),
+        signature.in_system_id,
+        signature.out_system_id,
     )
     .await?;
     create_system_jump(
         graph.clone(),
-        signature.out_system_id.clone(),
-        signature.in_system_id.clone(),
+        signature.out_system_id,
+        signature.in_system_id,
     )
     .await
 }
@@ -301,14 +298,11 @@ pub async fn set_system_jump_risk(
     galaxy_jumps: i32,
     galaxy_kills: i32,
 ) -> Result<(), Error> {
-    println!("Getting jumps and kills from system {}", system_id);
+    debug!("Getting jumps and kills from system {system_id}");
     match get_system(graph.clone(), system_id).await.unwrap() {
         None => {
-            println!(
-                "System could not be retrieved when trying to set jump risk {}",
-                system_id
-            );
-            return Ok(());
+            warn!("System could not be retrieved when trying to set jump risk {system_id}");
+            Ok(())
         }
         Some(system) => {
             let galaxy_average_jump_risk = if galaxy_jumps > 0 {
@@ -326,10 +320,7 @@ pub async fn set_system_jump_risk(
             };
             let total_risk = system_jump_risk + galaxy_average_jump_risk;
 
-            println!(
-                "Setting jump risks into system {} as {}",
-                system_id, total_risk
-            );
+            debug!("Setting jump risks into system {system_id} as {total_risk}");
             let set_system_risk = "
                 MATCH (otherSystem)-[r:JUMP]->(s:System {system_id: $system_id})
                 SET r.risk = $risk";
@@ -583,6 +574,17 @@ pub async fn remove_duplicate_systems(graph: Arc<Graph>) -> Result<(), Error> {
         FOREACH (duplicate IN TAIL(duplicates) | DETACH DELETE duplicate)";
 
     graph.run(query(remove_duplicates)).await
+}
+
+pub async fn remove_systems_by_id(graph: Arc<Graph>, system_ids: Vec<i64>) -> Result<(), Error> {
+    let remove_by_ids = "
+        MATCH (s:System)
+        WHERE s.system_id IN $ids
+        DETACH DELETE s";
+
+    graph
+        .run(query(remove_by_ids).param("ids", system_ids))
+        .await
 }
 
 pub async fn remove_duplicate_stargates(graph: Arc<Graph>) -> Result<(), Error> {
