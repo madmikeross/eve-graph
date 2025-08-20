@@ -1,3 +1,4 @@
+use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -7,50 +8,47 @@ use neo4rs::{query, Error, Error::DeserializationError, Graph, Row};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, warn};
 
-pub async fn get_graph_client_with_retry(max_retries: usize) -> Result<Arc<Graph>, Error> {
-    info!("Connecting to Neo4j");
-    let neo4j_container_name = "neo4j";
-    let uri = format!("bolt://{neo4j_container_name}:7687");
+pub async fn get_graph_client_with_retry(
+    max_retries: usize,
+    db_name: Option<&str>,
+) -> Result<Arc<Graph>, Error> {
+    info!("Connecting to Neo4j...");
+    // Default to `localhost` for local tests, and `neo4j` for the Docker environment.
+    // This can still be overridden by the NEO4J_HOSTNAME environment variable.
+    let default_hostname = if cfg!(test) { "127.0.0.1" } else { "neo4j" };
+    let neo4j_hostname =
+        env::var("NEO4J_HOSTNAME").unwrap_or_else(|_| default_hostname.to_string());
+    let db = db_name.unwrap_or("neo4j");
+    let uri = format!("bolt://{neo4j_hostname}:7687?database={db}");
     let user = "neo4j";
     let pass = "neo4jneo4j";
 
-    for _attempt in 1..=max_retries {
-        match Graph::new(uri.clone(), user, pass).await {
+    let mut last_error = None;
+
+    for attempt in 1..=max_retries {
+        info!(
+            "Attempt {}/{} to connect to Neo4j at {}",
+            attempt, max_retries, uri
+        );
+        match Graph::new(&uri, user, pass).await {
             Ok(graph) => {
-                let graph = Arc::new(graph);
-                match check_neo4j_health(graph.clone()).await {
-                    Ok(_) => {
-                        info!("Connected to Neo4j");
-                        return Ok(graph);
-                    }
-                    Err(_err) => {}
-                };
+                info!("Successfully connected to Neo4j.");
+                return Ok(Arc::new(graph));
             }
-            Err(_err) => {}
-        };
-
-        let seconds = 5;
-        tokio::time::sleep(Duration::from_secs(seconds)).await;
-    }
-
-    error!("Failed to connect to Neo4j after the allowed {max_retries} attempts");
-    Err(ConnectionError)
-}
-
-async fn check_neo4j_health(graph: Arc<Graph>) -> Result<(), Error> {
-    let test_query = "MATCH (n) RETURN n LIMIT 1";
-    let mut result = match graph.execute(query(test_query)).await {
-        Ok(row_stream) => row_stream,
-        Err(_err) => {
-            return Err(ConnectionError);
+            Err(err) => {
+                warn!("Connection attempt {} failed: {}", attempt, err);
+                last_error = Some(err);
+                if attempt < max_retries {
+                    let sleep_duration = Duration::from_secs(5);
+                    warn!("Retrying in {:?}...", sleep_duration);
+                    tokio::time::sleep(sleep_duration).await;
+                }
+            }
         }
-    };
-
-    // Any result means neo4j is responding
-    match result.next().await? {
-        None => Ok(()),
-        Some(_) => Ok(()),
     }
+
+    error!("Failed to connect to Neo4j after {} attempts.", max_retries);
+    Err(last_error.unwrap_or(ConnectionError)) // Return the last error or a generic one
 }
 
 fn row_count_is_positive(row: Row) -> bool {
@@ -595,4 +593,32 @@ pub async fn remove_duplicate_stargates(graph: Arc<Graph>) -> Result<(), Error> 
         FOREACH (duplicate IN TAIL(duplicates) | DETACH DELETE duplicate)";
 
     graph.run(query(remove_duplicates)).await
+}
+
+pub async fn get_all_stargate_ids(graph: Arc<Graph>) -> Result<Vec<i64>, Error> {
+    let get_all_stargate_ids_statement = "MATCH (s:Stargate) RETURN s.stargate_id AS stargate_id";
+    let mut result = graph.execute(query(get_all_stargate_ids_statement)).await?;
+    let mut stargate_ids = Vec::new();
+
+    while let Some(row) = result.next().await? {
+        if let Ok(stargate_id) = row.get("stargate_id") {
+            stargate_ids.push(stargate_id);
+        }
+    }
+
+    Ok(stargate_ids)
+}
+
+pub async fn remove_stargates_by_id(
+    graph: Arc<Graph>,
+    stargate_ids: Vec<i64>,
+) -> Result<(), Error> {
+    let remove_by_ids = "
+        MATCH (s:Stargate)
+        WHERE s.stargate_id IN $ids
+        DETACH DELETE s";
+
+    graph
+        .run(query(remove_by_ids).param("ids", stargate_ids))
+        .await
 }
