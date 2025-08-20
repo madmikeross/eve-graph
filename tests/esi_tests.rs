@@ -3,22 +3,25 @@ use reqwest::Client;
 use eve_graph::esi::{get_stargate_details, get_system_jumps, get_system_kills};
 
 #[tokio::test]
+#[ignore]
 async fn should_get_system_kills() {
     let client = Client::new();
-    let system_kills_response = get_system_kills(&client).await.unwrap();
+    let system_kills = get_system_kills(&client).await.unwrap();
 
-    assert!(&system_kills_response.system_kills.len() > &0);
+    assert!(!system_kills.is_empty());
 }
 
 #[tokio::test]
+#[ignore]
 async fn should_get_system_jumps() {
     let client = Client::new();
-    let system_jumps_response = get_system_jumps(&client).await.unwrap();
+    let system_jumps = get_system_jumps(&client).await.unwrap();
 
-    assert!(&system_jumps_response.system_jumps.len() > &0);
+    assert!(!system_jumps.is_empty());
 }
 
 #[tokio::test]
+#[ignore]
 async fn should_get_stargate_details() {
     let client = Client::new();
     let stargate_id = 50011905;
