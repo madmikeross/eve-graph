@@ -80,7 +80,11 @@ pub async fn refresh_eve_scout_system_relations(
         .iter()
         .filter(|sig| sig.signature_type == "wormhole")
         .for_each(|wormhole| {
-            set.spawn(database::save_wormhole(graph.clone(), wormhole.clone()));
+            set.spawn(database::save_wormhole(
+                graph.clone(),
+                wormhole.in_system_id,
+                wormhole.out_system_id,
+            ));
         });
 
     error_if_any_member_has_error(&mut set)

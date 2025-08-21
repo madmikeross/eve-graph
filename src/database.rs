@@ -2,7 +2,6 @@ use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::eve_scout::EveScoutSignature;
 use neo4rs::Error::ConnectionError;
 use neo4rs::{query, Error, Error::DeserializationError, Graph, Row};
 use serde::{Deserialize, Serialize};
@@ -235,23 +234,14 @@ pub async fn save_stargate(graph: Arc<Graph>, stargate: &Stargate) -> Result<(),
     .await
 }
 
-pub async fn save_wormhole(graph: Arc<Graph>, signature: EveScoutSignature) -> Result<(), Error> {
-    debug!(
-        "Saving wormhole from {} to {}",
-        signature.in_system_id, signature.out_system_id
-    );
-    create_system_jump(
-        graph.clone(),
-        signature.in_system_id,
-        signature.out_system_id,
-    )
-    .await?;
-    create_system_jump(
-        graph.clone(),
-        signature.out_system_id,
-        signature.in_system_id,
-    )
-    .await
+pub async fn save_wormhole(
+    graph: Arc<Graph>,
+    in_system_id: i64,
+    out_system_id: i64,
+) -> Result<(), Error> {
+    debug!("Saving wormhole from {} to {}", in_system_id, out_system_id);
+    create_system_jump(graph.clone(), in_system_id, out_system_id).await?;
+    create_system_jump(graph.clone(), out_system_id, in_system_id).await
 }
 
 pub async fn set_last_hour_system_jumps(
