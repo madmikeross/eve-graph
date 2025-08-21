@@ -304,12 +304,17 @@ pub async fn refresh_jump_risks(client: Client, graph: Arc<Graph>) -> Result<(),
     let system_ids = get_all_system_ids(graph.clone()).await?;
     let mut set = JoinSet::new();
 
+    let baseline_jump_risk = if galaxy_jumps > 0 {
+        galaxy_kills as f64 / galaxy_jumps as f64
+    } else {
+        0.01 // galaxy jumps should never be zero, but just in case
+    };
+
     system_ids.iter().for_each(|&system_id| {
         set.spawn(set_system_jump_risk(
             graph.clone(),
             system_id,
-            galaxy_jumps,
-            galaxy_kills,
+            baseline_jump_risk,
         ));
     });
 

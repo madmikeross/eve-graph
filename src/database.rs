@@ -293,8 +293,7 @@ pub async fn set_last_hour_system_kills(
 pub async fn set_system_jump_risk(
     graph: Arc<Graph>,
     system_id: i64,
-    galaxy_jumps: i32,
-    galaxy_kills: i32,
+    baseline_jump_risk: f64,
 ) -> Result<(), Error> {
     debug!("Getting jumps and kills from system {system_id}");
     match get_system(graph.clone(), system_id).await.unwrap() {
@@ -303,12 +302,6 @@ pub async fn set_system_jump_risk(
             Ok(())
         }
         Some(system) => {
-            let galaxy_average_jump_risk = if galaxy_jumps > 0 {
-                galaxy_kills as f64 / galaxy_jumps as f64
-            } else {
-                0.01 // galaxy jumps should never be zero, but just in case
-            };
-
             // System jump risk scales with the square of system kills
             let kills_squared = u32::pow(system.kills, 2);
             let system_jump_risk: f64 = if system.jumps > 0 {
@@ -316,7 +309,7 @@ pub async fn set_system_jump_risk(
             } else {
                 kills_squared.into()
             };
-            let total_risk = system_jump_risk + galaxy_average_jump_risk;
+            let total_risk = system_jump_risk + baseline_jump_risk;
 
             debug!("Setting jump risks into system {system_id} as {total_risk}");
             let set_system_risk = "
