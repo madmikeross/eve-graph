@@ -2,7 +2,7 @@ use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 
-use neo4rs::{query, DeError, Error as Neo4rsError, Graph, Row};
+use neo4rs::{DeError, Error as Neo4rsError, Graph, Row, query};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, warn};
 
@@ -391,10 +391,10 @@ pub async fn graph_exists(graph: &Arc<Graph>, graph_name: String) -> Result<bool
     let mut result = graph.execute(query(list_of_graphs_query)).await?;
 
     while let Some(row) = result.next().await? {
-        if let Ok(name) = row.get::<String>("graphName") {
-            if name == graph_name {
-                return Ok(true);
-            }
+        if let Ok(name) = row.get::<String>("graphName")
+            && name == graph_name
+        {
+            return Ok(true);
         }
     }
 

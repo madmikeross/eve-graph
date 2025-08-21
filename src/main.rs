@@ -12,7 +12,7 @@ use reqwest::Client;
 use tracing::{error, info};
 use warp::hyper::StatusCode;
 use warp::reject::Reject;
-use warp::{reply, Filter, Rejection, Reply};
+use warp::{Filter, Rejection, Reply, reply};
 
 #[tokio::main]
 async fn main() {

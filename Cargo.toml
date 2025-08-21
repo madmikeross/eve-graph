@@ -1,7 +1,7 @@
 [package]
 name = "eve-graph"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 reqwest = { version = "0.11", default-features = false, features = ["blocking", "json", "serde_json", "rustls-tls"] }
@@ -11,6 +11,5 @@ neo4rs = "0.7.0-rc.3"
 tokio = { version = "1", features = ["full"] }
 thiserror = "1.0.50"
 warp = "0.3.6"
-chrono = "0.4.31"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
