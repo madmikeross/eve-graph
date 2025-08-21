@@ -393,4 +393,31 @@ mod tests {
         assert_eq!(system.planets, vec![40000855]);
         assert_eq!(system.kills, 0); // Default value
     }
+
+    #[test]
+    fn test_stargate_from_esi_response() {
+        let esi_response = StargateEsiResponse {
+            stargate_id: 50011905,
+            name: "Stargate (Vouskiaho)".to_string(),
+            system_id: 30000142,
+            type_id: 29624,
+            position: crate::esi::Position {
+                x: 1.0,
+                y: 2.0,
+                z: 3.0,
+            },
+            destination: crate::esi::Destination {
+                stargate_id: 50011906,
+                system_id: 30000144,
+            },
+        };
+
+        let stargate = Stargate::from(esi_response);
+
+        assert_eq!(stargate.stargate_id, 50011905);
+        assert_eq!(stargate.name, "Stargate (Vouskiaho)");
+        assert_eq!(stargate.system_id, 30000142);
+        assert_eq!(stargate.destination_stargate_id, 50011906);
+        assert_eq!(stargate.destination_system_id, 30000144);
+    }
 }
