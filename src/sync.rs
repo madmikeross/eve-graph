@@ -304,12 +304,17 @@ pub async fn refresh_jump_risks(client: Client, graph: Arc<Graph>) -> Result<(),
     let system_ids = get_all_system_ids(graph.clone()).await?;
     let mut set = JoinSet::new();
 
+    let baseline_jump_risk = if galaxy_jumps > 0 {
+        galaxy_kills as f64 / galaxy_jumps as f64
+    } else {
+        0.01 // galaxy jumps should never be zero, but just in case
+    };
+
     system_ids.iter().for_each(|&system_id| {
         set.spawn(set_system_jump_risk(
             graph.clone(),
             system_id,
-            galaxy_jumps,
-            galaxy_kills,
+            baseline_jump_risk,
         ));
     });
 
@@ -387,5 +392,32 @@ mod tests {
         assert_eq!(system.stargates, vec![50000056]);
         assert_eq!(system.planets, vec![40000855]);
         assert_eq!(system.kills, 0); // Default value
+    }
+
+    #[test]
+    fn test_stargate_from_esi_response() {
+        let esi_response = StargateEsiResponse {
+            stargate_id: 50011905,
+            name: "Stargate (Vouskiaho)".to_string(),
+            system_id: 30000142,
+            type_id: 29624,
+            position: crate::esi::Position {
+                x: 1.0,
+                y: 2.0,
+                z: 3.0,
+            },
+            destination: crate::esi::Destination {
+                stargate_id: 50011906,
+                system_id: 30000144,
+            },
+        };
+
+        let stargate = Stargate::from(esi_response);
+
+        assert_eq!(stargate.stargate_id, 50011905);
+        assert_eq!(stargate.name, "Stargate (Vouskiaho)");
+        assert_eq!(stargate.system_id, 30000142);
+        assert_eq!(stargate.destination_stargate_id, 50011906);
+        assert_eq!(stargate.destination_system_id, 30000144);
     }
 }

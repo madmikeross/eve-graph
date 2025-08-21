@@ -293,44 +293,43 @@ pub async fn set_last_hour_system_kills(
 pub async fn set_system_jump_risk(
     graph: Arc<Graph>,
     system_id: i64,
-    galaxy_jumps: i32,
-    galaxy_kills: i32,
+    baseline_jump_risk: f64,
 ) -> Result<(), Error> {
-    debug!("Getting jumps and kills from system {system_id}");
-    match get_system(graph.clone(), system_id).await.unwrap() {
-        None => {
+    let system = match get_system(graph.clone(), system_id).await {
+        Ok(Some(system)) => system,
+        Ok(None) => {
             warn!("System could not be retrieved when trying to set jump risk {system_id}");
-            Ok(())
+            return Ok(());
         }
-        Some(system) => {
-            let galaxy_average_jump_risk = if galaxy_jumps > 0 {
-                galaxy_kills as f64 / galaxy_jumps as f64
-            } else {
-                0.01 // galaxy jumps should never be zero, but just in case
-            };
-
-            // System jump risk scales with the square of system kills
-            let kills_squared = u32::pow(system.kills, 2);
-            let system_jump_risk: f64 = if system.jumps > 0 {
-                kills_squared as f64 / system.jumps as f64
-            } else {
-                kills_squared.into()
-            };
-            let total_risk = system_jump_risk + galaxy_average_jump_risk;
-
-            debug!("Setting jump risks into system {system_id} as {total_risk}");
-            let set_system_risk = "
-                MATCH (otherSystem)-[r:JUMP]->(s:System {system_id: $system_id})
-                SET r.risk = $risk";
-            graph
-                .run(
-                    query(set_system_risk)
-                        .param("system_id", system_id)
-                        .param("risk", total_risk),
-                )
-                .await
+        Err(e) => {
+            warn!("System could not be retrieved when trying to set jump risk {system_id}: {e}");
+            return Err(e);
         }
-    }
+    };
+
+    let total_risk = calculate_total_risk(system.kills, system.jumps, baseline_jump_risk);
+
+    debug!("Setting jump risks into system {system_id} as {total_risk}");
+    let set_system_risk = "
+         MATCH (otherSystem)-[r:JUMP]->(s:System {system_id: $system_id})
+         SET r.risk = $risk";
+    graph
+        .run(
+            query(set_system_risk)
+                .param("system_id", system_id)
+                .param("risk", total_risk),
+        )
+        .await
+}
+
+fn calculate_total_risk(kills: u32, jumps: u32, baseline_jump_risk: f64) -> f64 {
+    let kills_squared = u32::pow(kills, 2);
+    let system_jump_risk: f64 = if jumps > 0 {
+        kills_squared as f64 / jumps as f64
+    } else {
+        kills_squared.into()
+    };
+    system_jump_risk + baseline_jump_risk
 }
 
 async fn jump_exists(
@@ -621,4 +620,36 @@ pub async fn remove_stargates_by_id(
     graph
         .run(query(remove_by_ids).param("ids", stargate_ids))
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_calculate_total_risk_no_activity() {
+        // With no system activity, risk should just be the baseline.
+        let risk = calculate_total_risk(0, 0, 0.1);
+        assert_eq!(risk, 0.1);
+    }
+
+    #[test]
+    fn test_calculate_total_risk_with_kills_no_jumps() {
+        // With no jumps, risk is kills_squared + baseline.
+        let risk = calculate_total_risk(5, 0, 0.1);
+        assert_eq!(risk, 25.1);
+    }
+
+    #[test]
+    fn test_calculate_total_risk_with_jumps_no_kills() {
+        // With no kills, risk should just be the baseline.
+        let risk = calculate_total_risk(0, 100, 0.1);
+        assert_eq!(risk, 0.1);
+    }
+    #[test]
+    fn test_calculate_total_risk_normal_activity() {
+        // (10^2 / 200) + 0.1 = 100 / 200 + 0.1 = 0.5 + 0.1 = 0.6
+        let risk = calculate_total_risk(10, 200, 0.1);
+        assert!((risk - 0.6).abs() < f64::EPSILON);
+    }
 }
