@@ -1,6 +1,5 @@
-use reqwest::{Client, Error, Response};
+use reqwest::{Client, Response};
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 use tracing::error;
 
 #[derive(Debug, Deserialize)]
@@ -46,19 +45,16 @@ pub struct Destination {
     pub system_id: i64,
 }
 
-pub async fn get_system_details(
-    client: &Client,
-    system_id: i64,
-) -> Result<SystemResponse, RequestError> {
+pub async fn get_system_details(client: &Client, system_id: i64) -> Result<SystemResponse, Error> {
     let system_detail_url = format!("https://esi.evetech.net/latest/universe/systems/{system_id}");
-    let response = client.get(&system_detail_url).send().await?;
-    response.json().await.map_err(RequestError::HttpError)
+    let response = client.get(system_detail_url).send().await?;
+    process_response(response).await
 }
 
-#[derive(Error, Debug)]
-pub enum RequestError {
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
     #[error("Request failed: {0}")]
-    HttpError(#[from] Error),
+    HttpError(#[from] reqwest::Error),
     #[error("Failed to parse response body: {0}")]
     ParseError(#[from] serde_json::Error),
     #[error("Rate limited by ESI: {body}")]
@@ -74,13 +70,13 @@ pub enum RequestError {
 pub async fn get_stargate_details(
     client: &Client,
     stargate_id: i64,
-) -> Result<StargateResponse, RequestError> {
+) -> Result<StargateResponse, Error> {
     let stargate_url = format!("https://esi.evetech.net/latest/universe/stargates/{stargate_id}");
     let response = client.get(stargate_url).send().await?;
     process_response(response).await
 }
 
-pub async fn get_system_ids(client: &Client) -> Result<Vec<i64>, RequestError> {
+pub async fn get_system_ids(client: &Client) -> Result<Vec<i64>, Error> {
     let systems_url = "https://esi.evetech.net/latest/universe/systems/";
     let response = client.get(systems_url).send().await?;
     process_response(response).await
@@ -92,7 +88,7 @@ pub struct SystemKills {
     pub system_id: i64,
 }
 
-pub async fn get_system_kills(client: &Client) -> Result<Vec<SystemKills>, RequestError> {
+pub async fn get_system_kills(client: &Client) -> Result<Vec<SystemKills>, Error> {
     let system_kills_url = "https://esi.evetech.net/latest/universe/system_kills/";
     let response = client.get(system_kills_url).send().await?;
     process_response(response).await
@@ -104,20 +100,18 @@ pub struct SystemJumps {
     pub system_id: i64,
 }
 
-pub async fn get_system_jumps(client: &Client) -> Result<Vec<SystemJumps>, RequestError> {
+pub async fn get_system_jumps(client: &Client) -> Result<Vec<SystemJumps>, Error> {
     let system_jumps_url = "https://esi.evetech.net/latest/universe/system_jumps/";
     let response = client.get(system_jumps_url).send().await?;
     process_response(response).await
 }
 
-async fn process_response<T: for<'de> Deserialize<'de>>(
-    response: Response,
-) -> Result<T, RequestError> {
+async fn process_response<T: for<'de> Deserialize<'de>>(response: Response) -> Result<T, Error> {
     let status = response.status();
     let url = response.url().clone();
 
     if status.is_success() {
-        return response.json::<T>().await.map_err(RequestError::HttpError);
+        return response.json::<T>().await.map_err(Error::HttpError);
     }
 
     let body = response
@@ -130,13 +124,13 @@ async fn process_response<T: for<'de> Deserialize<'de>>(
     );
 
     match status.as_u16() {
-        404 => Err(RequestError::NotFound { body }),
-        420 | 429 => Err(RequestError::RateLimited { body }),
-        500..=599 => Err(RequestError::ServerError {
+        404 => Err(Error::NotFound { body }),
+        420 | 429 => Err(Error::RateLimited { body }),
+        500..=599 => Err(Error::ServerError {
             status: status.as_u16(),
             body,
         }),
-        _ => Err(RequestError::UnexpectedError {
+        _ => Err(Error::UnexpectedError {
             status: status.as_u16(),
             body,
         }),

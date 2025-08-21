@@ -1,8 +1,16 @@
-use reqwest::Client;
+use reqwest::{Client, Response};
 use serde::{Deserialize, Serialize};
+use tracing::error;
 
-use crate::esi::RequestError;
-use crate::esi::RequestError::HttpError;
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
+    #[error("Request to EVE-Scout API failed")]
+    Request(#[from] reqwest::Error),
+    #[error("EVE-Scout API server error ({status}): {body}")]
+    ServerError { status: u16, body: String },
+    #[error("Unexpected EVE-Scout API error ({status}): {body}")]
+    UnexpectedError { status: u16, body: String },
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EveScoutSignature {
@@ -35,8 +43,39 @@ pub struct EveScoutSignature {
     comment: Option<String>,
 }
 
-pub async fn get_public_signatures(client: Client) -> Result<Vec<EveScoutSignature>, RequestError> {
-    let get_public_signatures = "https://api.eve-scout.com/v2/public/signatures";
-    let response = client.get(get_public_signatures).send().await?;
-    response.json().await.map_err(HttpError)
+pub async fn get_public_signatures(client: Client) -> Result<Vec<EveScoutSignature>, Error> {
+    let get_public_signatures_url = "https://api.eve-scout.com/v2/public/signatures";
+    let response = client.get(get_public_signatures_url).send().await?;
+    process_eve_scout_response(response).await
+}
+
+async fn process_eve_scout_response<T: for<'de> Deserialize<'de>>(
+    response: Response,
+) -> Result<T, Error> {
+    let status = response.status();
+    let url = response.url().clone();
+
+    if status.is_success() {
+        return response.json::<T>().await.map_err(Error::Request);
+    }
+
+    let body = response
+        .text()
+        .await
+        .unwrap_or_else(|_| "Could not read error body".to_string());
+    error!(
+        "EVE-Scout request to {} failed with status {}: {}",
+        url, status, body
+    );
+
+    match status.as_u16() {
+        500..=599 => Err(Error::ServerError {
+            status: status.as_u16(),
+            body,
+        }),
+        _ => Err(Error::UnexpectedError {
+            status: status.as_u16(),
+            body,
+        }),
+    }
 }

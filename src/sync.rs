@@ -12,8 +12,10 @@ use crate::{database, esi, eve_scout};
 
 #[derive(Error, Debug)]
 pub enum ReplicationError {
-    #[error("failed to retrieve the data")]
-    Source(#[from] esi::RequestError),
+    #[error("failed to retrieve the data from esi")]
+    EsiSource(#[from] esi::Error),
+    #[error("failed to retrieve the data from eve scout")]
+    EveScoutSource(#[from] eve_scout::Error),
     #[error("failed to process the data")]
     Process(#[from] JoinError),
     #[error("failed to persist data to the target")]
@@ -334,16 +336,16 @@ async fn pull_stargate(
                 .map_err(ReplicationError::Target)
         }
         Err(err) => match err {
-            esi::RequestError::NotFound { .. } => {
+            esi::Error::NotFound { .. } => {
                 // This can happen if a stargate was removed from ESI. It's safe to ignore.
                 info!(error = %err, "Stargate not found, likely removed from ESI. Skipping.");
                 Ok(())
             }
-            esi::RequestError::RateLimited { .. } => {
+            esi::Error::RateLimited { .. } => {
                 // This is a critical error. We should stop the entire process.
                 // Propagate the error up.
                 error!(error = %err, "Rate limited by ESI. Aborting stargate pull.");
-                Err(ReplicationError::Source(err))
+                Err(ReplicationError::EsiSource(err))
             }
             _ => {
                 // For other errors (server errors, unexpected issues), log it and skip this one.
