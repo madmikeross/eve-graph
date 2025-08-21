@@ -2,10 +2,21 @@ use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 
-use neo4rs::Error::ConnectionError;
-use neo4rs::{query, Error, Error::DeserializationError, Graph, Row};
+use neo4rs::{query, DeError, Error as Neo4rsError, Graph, Row};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, warn};
+
+#[derive(Debug, thiserror::Error)]
+#[error("GDS procedure call '{0}' did not return the expected row")]
+pub struct GdsProcedureError(&'static str);
+
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
+    #[error(transparent)]
+    Client(#[from] Neo4rsError),
+    #[error(transparent)]
+    Gds(#[from] GdsProcedureError),
+}
 
 pub async fn get_graph_client_with_retry(
     max_retries: usize,
@@ -47,7 +58,9 @@ pub async fn get_graph_client_with_retry(
     }
 
     error!("Failed to connect to Neo4j after {} attempts.", max_retries);
-    Err(last_error.unwrap_or(ConnectionError)) // Return the last error or a generic one
+    Err(Error::Client(
+        last_error.unwrap_or(Neo4rsError::ConnectionError),
+    )) // Return the last error or a generic one
 }
 
 fn row_count_is_positive(row: Row) -> bool {
@@ -119,7 +132,8 @@ pub async fn save_system(graph: &Arc<Graph>, system: &System) -> Result<(), Erro
                 .param("kills", system.kills)
                 .param("jumps", system.jumps),
         )
-        .await
+        .await?;
+    Ok(())
 }
 
 pub async fn get_system(graph: Arc<Graph>, system_id: i64) -> Result<Option<System>, Error> {
@@ -130,7 +144,7 @@ pub async fn get_system(graph: Arc<Graph>, system_id: i64) -> Result<Option<Syst
         .await?;
 
     match result.next().await? {
-        Some(row) => Ok(row.get("system").ok()),
+        Some(row) => Ok(row.get("system")?),
         None => Ok(None),
     }
 }
@@ -170,7 +184,7 @@ pub async fn get_saved_system_count(graph: &Arc<Graph>) -> Result<i64, Error> {
 
     match row {
         None => Ok(0),
-        Some(row) => row.get::<i64>("count").map_err(DeserializationError),
+        Some(row) => Ok(row.get("count")?),
     }
 }
 pub async fn get_saved_stargate_count(graph: &Arc<Graph>) -> Result<i64, Error> {
@@ -180,7 +194,7 @@ pub async fn get_saved_stargate_count(graph: &Arc<Graph>) -> Result<i64, Error> 
 
     match row {
         None => Ok(0),
-        Some(row) => row.get::<i64>("count").map_err(DeserializationError),
+        Some(row) => Ok(row.get("count")?),
     }
 }
 
@@ -226,12 +240,9 @@ pub async fn save_stargate(graph: Arc<Graph>, stargate: &Stargate) -> Result<(),
         )
         .await?;
 
-    create_system_jump_if_missing(
-        graph.clone(),
-        stargate.system_id,
-        stargate.destination_system_id,
-    )
-    .await
+    create_system_jump_if_missing(graph, stargate.system_id, stargate.destination_system_id)
+        .await?;
+    Ok(())
 }
 
 pub async fn save_wormhole(
@@ -259,7 +270,8 @@ pub async fn set_last_hour_system_jumps(
                 .param("system_id", system_id)
                 .param("jumps", jumps),
         )
-        .await
+        .await?;
+    Ok(())
 }
 
 pub async fn set_last_hour_system_kills(
@@ -277,7 +289,8 @@ pub async fn set_last_hour_system_kills(
                 .param("system_id", system_id)
                 .param("kills", kills),
         )
-        .await
+        .await?;
+    Ok(())
 }
 
 pub async fn set_system_jump_risk(
@@ -287,12 +300,9 @@ pub async fn set_system_jump_risk(
 ) -> Result<(), Error> {
     let system = match get_system(graph.clone(), system_id).await {
         Ok(Some(system)) => system,
-        Ok(None) => {
-            warn!("System could not be retrieved when trying to set jump risk {system_id}");
-            return Ok(());
-        }
+        Ok(None) => return Ok(()),
         Err(e) => {
-            warn!("System could not be retrieved when trying to set jump risk {system_id}: {e}");
+            warn!("System could not be retrieved when trying to set jump risk {system_id}: {e:?}");
             return Err(e);
         }
     };
@@ -309,7 +319,8 @@ pub async fn set_system_jump_risk(
                 .param("system_id", system_id)
                 .param("risk", total_risk),
         )
-        .await
+        .await?;
+    Ok(())
 }
 
 fn calculate_total_risk(kills: u32, jumps: u32, baseline_jump_risk: f64) -> f64 {
@@ -371,19 +382,19 @@ pub async fn create_system_jump(
                 .param("source_system_id", source_system)
                 .param("dest_system_id", dest_system),
         )
-        .await
+        .await?;
+    Ok(())
 }
 
 pub async fn graph_exists(graph: &Arc<Graph>, graph_name: String) -> Result<bool, Error> {
     let list_of_graphs_query = "CALL gds.graph.list";
-    let mut result = graph
-        .execute(query(list_of_graphs_query))
-        .await
-        .expect("Failed to get a list of gds graphs");
+    let mut result = graph.execute(query(list_of_graphs_query)).await?;
 
     while let Some(row) = result.next().await? {
-        if row.get::<String>("graphName").unwrap() == graph_name {
-            return Ok(true);
+        if let Ok(name) = row.get::<String>("graphName") {
+            if name == graph_name {
+                return Ok(true);
+            }
         }
     }
 
@@ -392,32 +403,22 @@ pub async fn graph_exists(graph: &Arc<Graph>, graph_name: String) -> Result<bool
 
 pub async fn drop_system_jump_graph(graph: &Arc<Graph>) -> Result<String, Error> {
     let drop_graph = "CALL gds.graph.drop('system-map')";
-    let mut result = graph
-        .execute(query(drop_graph))
-        .await
-        .expect("failed to drop system jump graph");
+    let mut result = graph.execute(query(drop_graph)).await?;
     let row = result
         .next()
-        .await
-        .expect("failed to get row option from query")
-        .expect("no row returned");
-
-    row.get::<String>("graphName").map_err(DeserializationError)
+        .await?
+        .ok_or(GdsProcedureError("drop system-map"))?;
+    Ok(row.get("graphName")?)
 }
 
 pub async fn drop_jump_risk_graph(graph: &Arc<Graph>) -> Result<String, Error> {
     let drop_graph = "CALL gds.graph.drop('jump-risk')";
-    let mut result = graph
-        .execute(query(drop_graph))
-        .await
-        .expect("failed to drop jump risk graph");
+    let mut result = graph.execute(query(drop_graph)).await?;
     let row = result
         .next()
-        .await
-        .expect("failed to get row option from query")
-        .expect("no row returned");
-
-    row.get::<String>("graphName").map_err(DeserializationError)
+        .await?
+        .ok_or(GdsProcedureError("drop jump-risk"))?;
+    Ok(row.get("graphName")?)
 }
 
 pub async fn build_system_jump_graph(graph: Arc<Graph>) -> Result<String, Error> {
@@ -430,17 +431,12 @@ pub async fn build_system_jump_graph(graph: Arc<Graph>) -> Result<String, Error>
                 relationshipProperties: 'cost'
             }
         )";
-    let mut result = graph
-        .execute(query(build_graph))
-        .await
-        .expect("failed to create jump count graph");
+    let mut result = graph.execute(query(build_graph)).await?;
     let row = result
         .next()
-        .await
-        .expect("failed to get a row option from query")
-        .expect("no row returned");
-
-    row.get::<String>("graphName").map_err(DeserializationError)
+        .await?
+        .ok_or(GdsProcedureError("project system-map"))?;
+    Ok(row.get("graphName")?)
 }
 
 pub async fn build_jump_risk_graph(graph: Arc<Graph>) -> Result<String, Error> {
@@ -453,17 +449,12 @@ pub async fn build_jump_risk_graph(graph: Arc<Graph>) -> Result<String, Error> {
                 relationshipProperties: 'risk'
             }
         )";
-    let mut result = graph
-        .execute(query(build_graph))
-        .await
-        .expect("failed to create jump count graph");
+    let mut result = graph.execute(query(build_graph)).await?;
     let row = result
         .next()
-        .await
-        .expect("failed to get a row option from query")
-        .expect("no row returned");
-
-    row.get::<String>("graphName").map_err(DeserializationError)
+        .await?
+        .ok_or(GdsProcedureError("project jump-risk"))?;
+    Ok(row.get("graphName")?)
 }
 
 pub async fn drop_system_connections(graph: &Arc<Graph>, system_name: &str) -> Result<(), Error> {
@@ -472,7 +463,8 @@ pub async fn drop_system_connections(graph: &Arc<Graph>, system_name: &str) -> R
         DELETE r";
     graph
         .run(query(drop_thera_connections).param("system_name", system_name))
-        .await
+        .await?;
+    Ok(())
 }
 
 pub async fn refresh_jump_cost_graph(graph: Arc<Graph>) -> Result<(), Error> {
@@ -517,7 +509,7 @@ pub async fn find_shortest_route(
         .await?;
 
     match result.next().await? {
-        Some(row) => Ok(row.get("nodeNames").ok()),
+        Some(row) => row.get("nodeNames").map_err(Error::from),
         None => Ok(None),
     }
 }
@@ -548,7 +540,7 @@ pub async fn find_safest_route(
         .await?;
 
     match result.next().await? {
-        Some(row) => Ok(row.get("nodeNames").ok()),
+        Some(row) => row.get("nodeNames").map_err(Error::from),
         None => Ok(None),
     }
 }
@@ -560,7 +552,8 @@ pub async fn remove_duplicate_systems(graph: Arc<Graph>) -> Result<(), Error> {
         WHERE count > 1
         FOREACH (duplicate IN TAIL(duplicates) | DETACH DELETE duplicate)";
 
-    graph.run(query(remove_duplicates)).await
+    graph.run(query(remove_duplicates)).await?;
+    Ok(())
 }
 
 pub async fn remove_systems_by_id(graph: Arc<Graph>, system_ids: Vec<i64>) -> Result<(), Error> {
@@ -571,7 +564,8 @@ pub async fn remove_systems_by_id(graph: Arc<Graph>, system_ids: Vec<i64>) -> Re
 
     graph
         .run(query(remove_by_ids).param("ids", system_ids))
-        .await
+        .await?;
+    Ok(())
 }
 
 pub async fn remove_duplicate_stargates(graph: Arc<Graph>) -> Result<(), Error> {
@@ -581,7 +575,8 @@ pub async fn remove_duplicate_stargates(graph: Arc<Graph>) -> Result<(), Error> 
         WHERE count > 1
         FOREACH (duplicate IN TAIL(duplicates) | DETACH DELETE duplicate)";
 
-    graph.run(query(remove_duplicates)).await
+    graph.run(query(remove_duplicates)).await?;
+    Ok(())
 }
 
 pub async fn get_all_stargate_ids(graph: Arc<Graph>) -> Result<Vec<i64>, Error> {
@@ -609,7 +604,14 @@ pub async fn remove_stargates_by_id(
 
     graph
         .run(query(remove_by_ids).param("ids", stargate_ids))
-        .await
+        .await?;
+    Ok(())
+}
+
+impl From<DeError> for Error {
+    fn from(e: DeError) -> Self {
+        Error::Client(Neo4rsError::DeserializationError(e))
+    }
 }
 
 #[cfg(test)]

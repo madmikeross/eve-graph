@@ -1,18 +1,18 @@
 use std::convert::Infallible;
 use std::sync::Arc;
 
+use eve_graph::database::*;
+use eve_graph::sync;
+use eve_graph::sync::{
+    refresh_eve_scout_system_relations, refresh_jump_risks, synchronize_esi_stargates,
+    synchronize_esi_systems,
+};
 use neo4rs::Graph;
 use reqwest::Client;
 use tracing::{error, info};
 use warp::hyper::StatusCode;
-use warp::reply::json;
+use warp::reject::Reject;
 use warp::{reply, Filter, Rejection, Reply};
-
-use eve_graph::database::*;
-use eve_graph::sync::{
-    refresh_eve_scout_system_relations, refresh_jump_risks, synchronize_esi_stargates,
-    synchronize_esi_systems, ReplicationError,
-};
 
 #[tokio::main]
 async fn main() {
@@ -81,7 +81,7 @@ async fn main() {
 }
 
 /// Runs the initial data synchronization tasks required for the application to function.
-async fn bootstrap(client: Client, graph: Arc<Graph>) -> Result<(), ReplicationError> {
+async fn bootstrap(client: Client, graph: Arc<Graph>) -> Result<(), sync::Error> {
     info!("Bootstrapping application data...");
 
     synchronize_esi_systems(client.clone(), graph.clone()).await?;
@@ -93,17 +93,13 @@ async fn bootstrap(client: Client, graph: Arc<Graph>) -> Result<(), ReplicationE
     refresh_jump_risks(client.clone(), graph.clone()).await?;
     info!("Jump risk calculation complete.");
 
-    refresh_jump_risk_graph(graph.clone())
-        .await
-        .map_err(eve_graph::sync::ReplicationError::Target)?;
+    refresh_jump_risk_graph(graph.clone()).await?;
     info!("Jump risk graph projection complete.");
 
     refresh_eve_scout_system_relations(client, graph.clone()).await?;
     info!("EVE Scout data refreshed.");
 
-    refresh_jump_cost_graph(graph)
-        .await
-        .map_err(eve_graph::sync::ReplicationError::Target)?;
+    refresh_jump_cost_graph(graph).await?;
     info!("Jump cost graph projection complete.");
 
     info!("Bootstrap complete.");
@@ -120,19 +116,27 @@ fn with_graph(
     warp::any().map(move || graph.clone())
 }
 
+/// A newtype wrapper for our library's error to implement `warp::reject::Reject`.
+#[derive(Debug)]
+struct ApiError(sync::Error);
+
+impl Reject for ApiError {}
+
 async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
     if err.is_not_found() {
         return Ok(reply::with_status("NOT_FOUND", StatusCode::NOT_FOUND));
     }
 
-    if err.find::<ReplicationError>().is_some() {
+    if let Some(api_error) = err.find::<ApiError>() {
+        error!("API Error: {:?}", api_error.0);
         return Ok(reply::with_status(
             "INTERNAL_SERVER_ERROR",
             StatusCode::INTERNAL_SERVER_ERROR,
         ));
     }
 
-    if err.find::<neo4rs::Error>().is_some() {
+    if let Some(db_error) = err.find::<neo4rs::Error>() {
+        error!("Database Error: {:?}", db_error);
         return Ok(reply::with_status(
             "INTERNAL_SERVER_ERROR",
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -153,10 +157,16 @@ async fn shortest_route_to_handler(
 ) -> Result<impl Reply, Rejection> {
     match find_shortest_route(graph, from_system_name, to_system_name)
         .await
-        .map_err(eve_graph::sync::ReplicationError::Target)?
+        .map_err(|e| warp::reject::custom(ApiError(e.into())))?
     {
-        None => Ok(json::<String>(&String::from(""))),
-        Some(route) => Ok(json::<Vec<_>>(&route)),
+        None => {
+            // Return a 404 Not Found, which is more idiomatic for a missing resource (the path).
+            let mut res = warp::reply::json(&serde_json::json!({ "error": "route not found" }))
+                .into_response();
+            *res.status_mut() = StatusCode::NOT_FOUND;
+            Ok(res)
+        }
+        Some(route) => Ok(warp::reply::json(&route).into_response()),
     }
 }
 
@@ -167,19 +177,24 @@ async fn safest_route_to_handler(
 ) -> Result<impl Reply, Rejection> {
     let exists = graph_exists(&graph, String::from("jump-risk"))
         .await
-        .map_err(eve_graph::sync::ReplicationError::Target)?;
+        .map_err(|e| warp::reject::custom(ApiError(e.into())))?;
     if !exists {
         build_jump_risk_graph(graph.clone())
             .await
-            .map_err(eve_graph::sync::ReplicationError::Target)?;
+            .map_err(|e| warp::reject::custom(ApiError(e.into())))?;
     }
 
     match find_safest_route(graph, from_system_name, to_system_name)
         .await
-        .map_err(eve_graph::sync::ReplicationError::Target)?
+        .map_err(|e| warp::reject::custom(ApiError(e.into())))?
     {
-        None => Ok(json::<String>(&String::from(""))),
-        Some(route) => Ok(json::<Vec<_>>(&route)),
+        None => {
+            let mut res = warp::reply::json(&serde_json::json!({ "error": "route not found" }))
+                .into_response();
+            *res.status_mut() = StatusCode::NOT_FOUND;
+            Ok(res)
+        }
+        Some(route) => Ok(warp::reply::json(&route).into_response()),
     }
 }
 
@@ -187,18 +202,22 @@ async fn wormholes_refresh_handler(
     client: Client,
     graph: Arc<Graph>,
 ) -> Result<impl Reply, Rejection> {
-    refresh_eve_scout_system_relations(client, graph.clone()).await?;
+    refresh_eve_scout_system_relations(client, graph.clone())
+        .await
+        .map_err(|e| warp::reject::custom(ApiError(e)))?;
     refresh_jump_cost_graph(graph)
         .await
-        .map_err(eve_graph::sync::ReplicationError::Target)?;
+        .map_err(|e| warp::reject::custom(ApiError(e.into())))?;
     Ok(reply())
 }
 
 async fn systems_risk_handler(client: Client, graph: Arc<Graph>) -> Result<impl Reply, Rejection> {
-    refresh_jump_risks(client, graph.clone()).await?;
+    refresh_jump_risks(client, graph.clone())
+        .await
+        .map_err(|e| warp::reject::custom(ApiError(e)))?;
     refresh_jump_risk_graph(graph)
         .await
-        .map_err(eve_graph::sync::ReplicationError::Target)?;
+        .map_err(|e| warp::reject::custom(ApiError(e.into())))?;
     Ok(reply())
 }
 
@@ -206,7 +225,9 @@ async fn systems_refresh_handler(
     client: Client,
     graph: Arc<Graph>,
 ) -> Result<impl Reply, Rejection> {
-    synchronize_esi_systems(client, graph).await?;
+    synchronize_esi_systems(client, graph)
+        .await
+        .map_err(|e| warp::reject::custom(ApiError(e)))?;
     Ok(reply())
 }
 
@@ -214,9 +235,11 @@ async fn stargates_refresh_handler(
     client: Client,
     graph: Arc<Graph>,
 ) -> Result<impl Reply, Rejection> {
-    synchronize_esi_stargates(client, graph.clone()).await?;
+    synchronize_esi_stargates(client, graph.clone())
+        .await
+        .map_err(|e| warp::reject::custom(ApiError(e)))?;
     refresh_jump_cost_graph(graph)
         .await
-        .map_err(eve_graph::sync::ReplicationError::Target)?;
+        .map_err(|e| warp::reject::custom(ApiError(e.into())))?;
     Ok(reply())
 }

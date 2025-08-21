@@ -1,17 +1,17 @@
 use std::sync::Arc;
 
-use neo4rs::{Error as Neo4rsError, Graph};
+// todo: remove direct dependency on neo4rs
+use neo4rs::Graph;
 use reqwest::Client;
 use thiserror::Error;
 use tokio::sync::Semaphore;
 use tokio::task::{JoinError, JoinSet};
 use tracing::{error, info, instrument};
-use warp::reject::Reject;
 
 use crate::{database, esi, eve_scout};
 
 #[derive(Error, Debug)]
-pub enum ReplicationError {
+pub enum Error {
     #[error("failed to retrieve the data from esi")]
     EsiSource(#[from] esi::Error),
     #[error("failed to retrieve the data from eve scout")]
@@ -19,10 +19,8 @@ pub enum ReplicationError {
     #[error("failed to process the data")]
     Process(#[from] JoinError),
     #[error("failed to persist data to the target")]
-    Target(#[from] Neo4rsError),
+    Target(#[from] database::Error),
 }
-
-impl Reject for ReplicationError {}
 
 impl From<esi::SystemResponse> for database::System {
     fn from(s: esi::SystemResponse) -> Self {
@@ -68,10 +66,14 @@ impl From<esi::StargateResponse> for database::Stargate {
 pub async fn refresh_eve_scout_system_relations(
     client: Client,
     graph: Arc<Graph>,
-) -> Result<(), ReplicationError> {
-    info!("Refreshing EVE Scout Public Connections");
-    database::drop_system_connections(&graph, "Thera").await?;
-    database::drop_system_connections(&graph, "Turnur").await?;
+) -> Result<(), Error> {
+    info!("Refreshing EVE Scout public connections");
+    database::drop_system_connections(&graph, "Thera")
+        .await
+        .map_err(Error::Target)?;
+    database::drop_system_connections(&graph, "Turnur")
+        .await
+        .map_err(Error::Target)?;
 
     let mut set = JoinSet::new();
 
@@ -87,17 +89,15 @@ pub async fn refresh_eve_scout_system_relations(
             ));
         });
 
-    error_if_any_member_has_error(&mut set)
-        .await
-        .unwrap()
-        .map_err(ReplicationError::Target)
+    error_if_any_member_has_error(&mut set).await.unwrap()?;
+    Ok(())
 }
 
 async fn pull_stargates(
     client: Client,
     graph: Arc<Graph>,
     stargate_ids: Vec<i64>,
-) -> Result<(), ReplicationError> {
+) -> Result<(), Error> {
     info!(
         "Pulling details for {} stargates from ESI",
         stargate_ids.len()
@@ -118,10 +118,7 @@ async fn pull_stargates(
     error_if_any_member_has_error(&mut set).await.unwrap()
 }
 
-pub async fn synchronize_esi_systems(
-    client: Client,
-    graph: Arc<Graph>,
-) -> Result<(), ReplicationError> {
+pub async fn synchronize_esi_systems(client: Client, graph: Arc<Graph>) -> Result<(), Error> {
     info!("Synchronizing systems with ESI");
 
     // Get all system IDs from ESI (source of truth)
@@ -142,7 +139,9 @@ pub async fn synchronize_esi_systems(
             "Removing {} stale systems from the database.",
             to_remove.len()
         );
-        database::remove_systems_by_id(graph.clone(), to_remove).await?;
+        database::remove_systems_by_id(graph.clone(), to_remove)
+            .await
+            .map_err(Error::Target)?;
     }
 
     // Find systems to add (in ESI but not in DB)
@@ -157,7 +156,9 @@ pub async fn synchronize_esi_systems(
 
     // Clean up any duplicates that might have crept in
     info!("Checking for and removing any duplicate systems.");
-    database::remove_duplicate_systems(graph.clone()).await?;
+    database::remove_duplicate_systems(graph.clone())
+        .await
+        .map_err(Error::Target)?;
 
     let final_count = database::get_saved_system_count(&graph).await?;
     info!(
@@ -168,10 +169,7 @@ pub async fn synchronize_esi_systems(
     Ok(())
 }
 
-pub async fn synchronize_esi_stargates(
-    client: Client,
-    graph: Arc<Graph>,
-) -> Result<(), ReplicationError> {
+pub async fn synchronize_esi_stargates(client: Client, graph: Arc<Graph>) -> Result<(), Error> {
     info!("Synchronizing stargates with ESI");
 
     // Get all stargate IDs from our DB's systems (source of truth for what *should* exist)
@@ -193,7 +191,9 @@ pub async fn synchronize_esi_stargates(
             "Removing {} stale stargates from the database.",
             to_remove.len()
         );
-        database::remove_stargates_by_id(graph.clone(), to_remove).await?;
+        database::remove_stargates_by_id(graph.clone(), to_remove)
+            .await
+            .map_err(Error::Target)?;
     }
 
     // Find stargates to add (in ESI list but not in DB)
@@ -208,7 +208,9 @@ pub async fn synchronize_esi_stargates(
 
     // Clean up any duplicates that might have crept in
     info!("Checking for and removing any duplicate stargates.");
-    database::remove_duplicate_stargates(graph.clone()).await?;
+    database::remove_duplicate_stargates(graph.clone())
+        .await
+        .map_err(Error::Target)?;
 
     let final_count = database::get_saved_stargate_count(&graph).await?;
     info!(
@@ -222,7 +224,7 @@ async fn pull_systems(
     client: Client,
     graph: Arc<Graph>,
     system_ids: Vec<i64>,
-) -> Result<(), ReplicationError> {
+) -> Result<(), Error> {
     let mut set = JoinSet::new();
     info!("Pulling details for {} systems from ESI", system_ids.len());
     for system_id in system_ids {
@@ -231,16 +233,11 @@ async fn pull_systems(
     error_if_any_member_has_error(&mut set).await.unwrap()
 }
 
-async fn pull_system(
-    client: Client,
-    graph: Arc<Graph>,
-    system_id: i64,
-) -> Result<(), ReplicationError> {
+async fn pull_system(client: Client, graph: Arc<Graph>, system_id: i64) -> Result<(), Error> {
     let system_response = esi::get_system_details(&client, system_id).await?;
     let system = database::System::from(system_response);
-    database::save_system(&graph, &system)
-        .await
-        .map_err(ReplicationError::Target)
+    database::save_system(&graph, &system).await?;
+    Ok(())
 }
 
 async fn error_if_any_member_has_error<T: 'static>(
@@ -254,7 +251,7 @@ async fn error_if_any_member_has_error<T: 'static>(
     Some(Ok(()))
 }
 
-pub async fn pull_system_kills(client: Client, graph: Arc<Graph>) -> Result<i32, ReplicationError> {
+pub async fn pull_system_kills(client: Client, graph: Arc<Graph>) -> Result<i32, Error> {
     let system_kills = esi::get_system_kills(&client).await?;
     let galaxy_kills: i32 = system_kills.iter().map(|s| s.ship_kills).sum();
 
@@ -271,14 +268,11 @@ pub async fn pull_system_kills(client: Client, graph: Arc<Graph>) -> Result<i32,
     error_if_any_member_has_error(&mut set)
         .await
         .unwrap()
-        .map_err(ReplicationError::Target)
         .map(|_| galaxy_kills)
+        .map_err(Error::Target)
 }
 
-pub async fn pull_last_hour_of_jumps(
-    client: Client,
-    graph: Arc<Graph>,
-) -> Result<i32, ReplicationError> {
+pub async fn pull_last_hour_of_jumps(client: Client, graph: Arc<Graph>) -> Result<i32, Error> {
     let system_jumps = esi::get_system_jumps(&client).await?;
     let galaxy_jumps: i32 = system_jumps.iter().map(|s| s.ship_jumps).sum();
 
@@ -295,11 +289,11 @@ pub async fn pull_last_hour_of_jumps(
     error_if_any_member_has_error(&mut set)
         .await
         .unwrap()
-        .map_err(ReplicationError::Target)
         .map(|_| galaxy_jumps)
+        .map_err(Error::Target)
 }
 
-pub async fn refresh_jump_risks(client: Client, graph: Arc<Graph>) -> Result<(), ReplicationError> {
+pub async fn refresh_jump_risks(client: Client, graph: Arc<Graph>) -> Result<(), Error> {
     info!("Refreshing system jump risks");
     let galaxy_kills = pull_system_kills(client.clone(), graph.clone()).await?;
     let galaxy_jumps = pull_last_hour_of_jumps(client.clone(), graph.clone()).await?;
@@ -323,21 +317,16 @@ pub async fn refresh_jump_risks(client: Client, graph: Arc<Graph>) -> Result<(),
     error_if_any_member_has_error(&mut set)
         .await
         .unwrap()
-        .map_err(ReplicationError::Target)
+        .map_err(Error::Target)
 }
 
 #[instrument(skip(client, graph), fields(stargate_id = %stargate_id))]
-async fn pull_stargate(
-    client: Client,
-    graph: Arc<Graph>,
-    stargate_id: i64,
-) -> Result<(), ReplicationError> {
+async fn pull_stargate(client: Client, graph: Arc<Graph>, stargate_id: i64) -> Result<(), Error> {
     match esi::get_stargate_details(&client, stargate_id).await {
         Ok(response) => {
             let stargate = database::Stargate::from(response);
-            database::save_stargate(graph.clone(), &stargate)
-                .await
-                .map_err(ReplicationError::Target)
+            database::save_stargate(graph.clone(), &stargate).await?;
+            Ok(())
         }
         Err(err) => match err {
             esi::Error::NotFound { .. } => {
@@ -349,7 +338,7 @@ async fn pull_stargate(
                 // This is a critical error. We should stop the entire process.
                 // Propagate the error up.
                 error!(error = %err, "Rate limited by ESI. Aborting stargate pull.");
-                Err(ReplicationError::EsiSource(err))
+                Err(Error::EsiSource(err))
             }
             _ => {
                 // For other errors (server errors, unexpected issues), log it and skip this one.
