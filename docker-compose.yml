@@ -3,6 +3,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    environment:
+      - NEO4J_HOSTNAME=neo4j
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=neo4jneo4j
     ports:
       - "8008:8008"
     depends_on:

@@ -23,15 +23,13 @@ pub async fn get_graph_client_with_retry(
     db_name: Option<&str>,
 ) -> Result<Arc<Graph>, Error> {
     info!("Connecting to Neo4j...");
-    // Default to `localhost` for local tests, and `neo4j` for the Docker environment.
-    // This can still be overridden by the NEO4J_HOSTNAME environment variable.
     let default_hostname = if cfg!(test) { "127.0.0.1" } else { "neo4j" };
     let neo4j_hostname =
         env::var("NEO4J_HOSTNAME").unwrap_or_else(|_| default_hostname.to_string());
     let db = db_name.unwrap_or("neo4j");
     let uri = format!("bolt://{neo4j_hostname}:7687?database={db}");
-    let user = "neo4j";
-    let pass = "neo4jneo4j";
+    let user = env::var("NEO4J_USERNAME").unwrap_or_else(|_| "neo4j".to_string());
+    let pass = env::var("NEO4J_PASSWORD").unwrap_or_else(|_| "neo4jneo4j".to_string());
 
     let mut last_error = None;
 
@@ -40,7 +38,7 @@ pub async fn get_graph_client_with_retry(
             "Attempt {}/{} to connect to Neo4j at {}",
             attempt, max_retries, uri
         );
-        match Graph::new(&uri, user, pass).await {
+        match Graph::new(&uri, &user, &pass).await {
             Ok(graph) => {
                 info!("Successfully connected to Neo4j.");
                 return Ok(Arc::new(graph));
