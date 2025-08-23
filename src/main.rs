@@ -44,6 +44,16 @@ async fn main() {
         .and(with_graph(graph.clone()))
         .and_then(safest_route_to_handler);
 
+    let nearest_ratting_route = warp::path!("nearest-ratting-system" / String)
+        .and(warp::get())
+        .and(with_graph(graph.clone()))
+        .and_then(nearest_ratting_system_handler);
+
+    let safest_ratting_route = warp::path!("safest-ratting-system" / String)
+        .and(warp::get())
+        .and(with_graph(graph.clone()))
+        .and_then(safest_ratting_system_handler);
+
     let systems_refresh = warp::path!("systems" / "refresh")
         .and(warp::post())
         .and(with_client(client.clone()))
@@ -70,6 +80,8 @@ async fn main() {
 
     let routes = shortest_route
         .or(safest_route)
+        .or(nearest_ratting_route)
+        .or(safest_ratting_route)
         .or(wormholes_refresh)
         .or(systems_refresh)
         .or(systems_risk)
@@ -189,6 +201,53 @@ async fn safest_route_to_handler(
         .map_err(|e| warp::reject::custom(ApiError(e.into())))?
     {
         None => {
+            let mut res = warp::reply::json(&serde_json::json!({ "error": "route not found" }))
+                .into_response();
+            *res.status_mut() = StatusCode::NOT_FOUND;
+            Ok(res)
+        }
+        Some(route) => Ok(warp::reply::json(&route).into_response()),
+    }
+}
+
+async fn nearest_ratting_system_handler(
+    from_system_name: String,
+    graph: Arc<Graph>,
+) -> Result<impl Reply, Rejection> {
+    match find_nearest_ratting_system(graph, from_system_name)
+        .await
+        .map_err(|e| warp::reject::custom(ApiError(e.into())))?
+    {
+        None => {
+            // Return a 404 Not Found, which is more idiomatic for a missing resource (the path).
+            let mut res = warp::reply::json(&serde_json::json!({ "error": "route not found" }))
+                .into_response();
+            *res.status_mut() = StatusCode::NOT_FOUND;
+            Ok(res)
+        }
+        Some(route) => Ok(warp::reply::json(&route).into_response()),
+    }
+}
+
+async fn safest_ratting_system_handler(
+    from_system_name: String,
+    graph: Arc<Graph>,
+) -> Result<impl Reply, Rejection> {
+    let exists = graph_exists(&graph, String::from("jump-risk"))
+        .await
+        .map_err(|e| warp::reject::custom(ApiError(e.into())))?;
+    if !exists {
+        build_jump_risk_graph(graph.clone())
+            .await
+            .map_err(|e| warp::reject::custom(ApiError(e.into())))?;
+    }
+
+    match find_safest_ratting_system(graph, from_system_name)
+        .await
+        .map_err(|e| warp::reject::custom(ApiError(e.into())))?
+    {
+        None => {
+            // Return a 404 Not Found, which is more idiomatic for a missing resource (the path).
             let mut res = warp::reply::json(&serde_json::json!({ "error": "route not found" }))
                 .into_response();
             *res.status_mut() = StatusCode::NOT_FOUND;

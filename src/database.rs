@@ -543,6 +543,72 @@ pub async fn find_safest_route(
     }
 }
 
+pub async fn find_nearest_ratting_system(
+    graph: Arc<Graph>,
+    from_system_name: String,
+) -> Result<Option<Vec<String>>, Error> {
+    let shortest_path_to_ratting_query = "
+        MATCH (target_systems:System)
+        WHERE target_systems.security_status >= 0.05 AND target_systems.security_status < 0.15
+        WITH COLLECT(target_systems) AS targets
+        MATCH (source:System {name: $from_system_name})
+        UNWIND targets AS target
+        CALL gds.shortestPath.dijkstra.stream('system-map', {
+            sourceNode: source,
+            targetNode: target,
+            relationshipWeightProperty: 'cost'
+        })
+        YIELD nodeIds, totalCost
+        WITH nodeIds, totalCost
+        ORDER BY totalCost ASC
+        LIMIT 1
+        RETURN
+            [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
+    ";
+
+    let mut result = graph
+        .execute(query(shortest_path_to_ratting_query).param("from_system_name", from_system_name))
+        .await?;
+
+    match result.next().await? {
+        Some(row) => row.get("nodeNames").map_err(Error::from),
+        None => Ok(None),
+    }
+}
+
+pub async fn find_safest_ratting_system(
+    graph: Arc<Graph>,
+    from_system_name: String,
+) -> Result<Option<Vec<String>>, Error> {
+    let safest_path_to_ratting_query = "
+        MATCH (target_systems:System)
+        WHERE target_systems.security_status >= 0.05 AND target_systems.security_status < 0.15
+        WITH COLLECT(target_systems) AS targets
+        MATCH (source:System {name: $from_system_name})
+        UNWIND targets AS target
+        CALL gds.shortestPath.dijkstra.stream('jump-risk', {
+            sourceNode: source,
+            targetNode: target,
+            relationshipWeightProperty: 'risk'
+        })
+        YIELD nodeIds, totalCost
+        WITH nodeIds, totalCost
+        ORDER BY totalCost ASC
+        LIMIT 1
+        RETURN
+            [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
+    ";
+
+    let mut result = graph
+        .execute(query(safest_path_to_ratting_query).param("from_system_name", from_system_name))
+        .await?;
+
+    match result.next().await? {
+        Some(row) => row.get("nodeNames").map_err(Error::from),
+        None => Ok(None),
+    }
+}
+
 pub async fn remove_duplicate_systems(graph: Arc<Graph>) -> Result<(), Error> {
     let remove_duplicates = "
         MATCH (s:System)
