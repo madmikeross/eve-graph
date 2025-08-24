@@ -7,6 +7,7 @@ use eve_graph::sync::{
     refresh_eve_scout_system_relations, refresh_jump_risks, synchronize_esi_stargates,
     synchronize_esi_systems,
 };
+use serde::Deserialize;
 use neo4rs::Graph;
 use reqwest::Client;
 use tracing::{error, info};
@@ -44,13 +45,15 @@ async fn main() {
         .and(with_graph(graph.clone()))
         .and_then(safest_route_to_handler);
 
-    let nearest_ratting_route = warp::path!("nearest-ratting-system" / String)
-        .and(warp::get())
+    let nearest_ratting_route = warp::path!("nearest-ratting-system")
+        .and(warp::post())
+        .and(warp::body::json())
         .and(with_graph(graph.clone()))
         .and_then(nearest_ratting_system_handler);
 
-    let safest_ratting_route = warp::path!("safest-ratting-system" / String)
-        .and(warp::get())
+    let safest_ratting_route = warp::path!("safest-ratting-system")
+        .and(warp::post())
+        .and(warp::body::json())
         .and(with_graph(graph.clone()))
         .and_then(safest_ratting_system_handler);
 
@@ -162,6 +165,13 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
     ))
 }
 
+#[derive(Deserialize)]
+struct RouteRequest {
+    from_system_name: String,
+    #[serde(default)]
+    avoid_systems: Vec<String>,
+}
+
 async fn shortest_route_to_handler(
     from_system_name: String,
     to_system_name: String,
@@ -211,10 +221,10 @@ async fn safest_route_to_handler(
 }
 
 async fn nearest_ratting_system_handler(
-    from_system_name: String,
+    request: RouteRequest,
     graph: Arc<Graph>,
 ) -> Result<impl Reply, Rejection> {
-    match find_nearest_ratting_system(graph, from_system_name)
+    match find_nearest_ratting_system(graph, request.from_system_name, request.avoid_systems)
         .await
         .map_err(|e| warp::reject::custom(ApiError(e.into())))?
     {
@@ -230,7 +240,7 @@ async fn nearest_ratting_system_handler(
 }
 
 async fn safest_ratting_system_handler(
-    from_system_name: String,
+    request: RouteRequest,
     graph: Arc<Graph>,
 ) -> Result<impl Reply, Rejection> {
     let exists = graph_exists(&graph, String::from("jump-risk"))
@@ -242,7 +252,7 @@ async fn safest_ratting_system_handler(
             .map_err(|e| warp::reject::custom(ApiError(e.into())))?;
     }
 
-    match find_safest_ratting_system(graph, from_system_name)
+    match find_safest_ratting_system(graph, request.from_system_name, request.avoid_systems)
         .await
         .map_err(|e| warp::reject::custom(ApiError(e.into())))?
     {

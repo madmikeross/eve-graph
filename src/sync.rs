@@ -70,16 +70,14 @@ pub async fn refresh_eve_scout_system_relations(
     info!("Starting EVE Scout public connections refresh...");
 
     info!("Dropping existing connections for Thera...");
-    database::drop_system_connections(&graph, "Thera")
+    database::drop_wormhole_connections_for_system(&graph, "Thera")
         .await
         .map_err(Error::Target)?;
-    info!("Successfully dropped connections for Thera.");
 
     info!("Dropping existing connections for Turnur...");
-    database::drop_system_connections(&graph, "Turnur")
+    database::drop_wormhole_connections_for_system(&graph, "Turnur")
         .await
         .map_err(Error::Target)?;
-    info!("Successfully dropped connections for Turnur.");
 
     info!("Fetching new signatures from EVE Scout...");
     let signatures = eve_scout::get_public_signatures(client.clone()).await?;
@@ -97,6 +95,7 @@ pub async fn refresh_eve_scout_system_relations(
     }
 
     let mut set = JoinSet::new();
+    let wormhole_count = wormholes.len();
     for wormhole in wormholes {
         let graph = graph.clone();
         set.spawn(async move {
@@ -109,7 +108,7 @@ pub async fn refresh_eve_scout_system_relations(
     join_all_and_check_errors(&mut set).await?;
     info!(
         "Successfully processed and saved {} wormhole connections.",
-        set.len()
+        wormhole_count
     );
     Ok(())
 }

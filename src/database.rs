@@ -249,8 +249,28 @@ pub async fn save_wormhole(
     out_system_id: i64,
 ) -> Result<(), Error> {
     debug!("Saving wormhole from {} to {}", in_system_id, out_system_id);
-    create_system_jump(graph.clone(), in_system_id, out_system_id).await?;
-    create_system_jump(graph.clone(), out_system_id, in_system_id).await
+    create_wormhole_jump(graph.clone(), in_system_id, out_system_id).await?;
+    create_wormhole_jump(graph.clone(), out_system_id, in_system_id).await
+}
+
+async fn create_wormhole_jump(
+    graph: Arc<Graph>,
+    source_system: i64,
+    dest_system: i64,
+) -> Result<(), Error> {
+    let wormhole_connection = "
+        MATCH (source:System {system_id: $source_system_id})
+        MATCH (dest:System {system_id: $dest_system_id})
+        CREATE (source)-[:JUMP {cost: 1, type: 'wormhole'}]->(dest)";
+
+    graph
+        .run(
+            query(wormhole_connection)
+                .param("source_system_id", source_system)
+                .param("dest_system_id", dest_system),
+        )
+        .await?;
+    Ok(())
 }
 
 pub async fn set_last_hour_system_jumps(
@@ -372,7 +392,7 @@ pub async fn create_system_jump(
     let inbound_connection = "\
         MATCH (source:System {system_id: $source_system_id})
         MATCH (dest:System {system_id: $dest_system_id})
-        CREATE (source)-[:JUMP {cost: 1}]->(dest)";
+        CREATE (source)-[:JUMP {cost: 1, type: 'stargate'}]->(dest)";
 
     graph
         .run(
@@ -455,12 +475,42 @@ pub async fn build_jump_risk_graph(graph: Arc<Graph>) -> Result<String, Error> {
     Ok(row.get("graphName")?)
 }
 
-pub async fn drop_system_connections(graph: &Arc<Graph>, system_name: &str) -> Result<(), Error> {
-    let drop_connections_query = "\
-        MATCH (:System {name: $system_name})-[r]-()
-        DELETE r";
+pub async fn drop_wormhole_connections_for_system(
+    graph: &Arc<Graph>,
+    system_name: &str,
+) -> Result<(), Error> {
+    // Step 1: Find and log the connections that will be deleted.
+    let find_query = "
+        MATCH (s:System {name: $system_name})-[r:JUMP {type: 'wormhole'}]-(d:System)
+        RETURN s.name AS source, d.name AS destination
+    ";
+    let mut result = graph
+        .execute(query(find_query).param("system_name", system_name))
+        .await?;
+
+    let mut deleted_count = 0;
+    while let Some(row) = result.next().await? {
+        let source: String = row.get("source")?;
+        let destination: String = row.get("destination")?;
+        info!(
+            "Deleting wormhole connection: {} <-> {}",
+            source, destination
+        );
+        deleted_count += 1;
+    }
+
+    if deleted_count == 0 {
+        info!("No wormhole connections to delete for {}.", system_name);
+        return Ok(());
+    }
+
+    // Step 2: Delete the connections.
+    let delete_query = "
+        MATCH (:System {name: $system_name})-[r:JUMP {type: 'wormhole'}]-()
+        DELETE r
+    ";
     graph
-        .run(query(drop_connections_query).param("system_name", system_name))
+        .run(query(delete_query).param("system_name", system_name))
         .await?;
     Ok(())
 }
@@ -546,6 +596,7 @@ pub async fn find_safest_route(
 pub async fn find_nearest_ratting_system(
     graph: Arc<Graph>,
     from_system_name: String,
+    avoid_systems: Vec<String>,
 ) -> Result<Option<Vec<String>>, Error> {
     let shortest_path_to_ratting_query = "
         MATCH (target_systems:System)
@@ -559,15 +610,20 @@ pub async fn find_nearest_ratting_system(
             relationshipWeightProperty: 'cost'
         })
         YIELD nodeIds, totalCost
-        WITH nodeIds, totalCost
+        WITH nodeIds, totalCost, [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
+        WHERE NONE(nodeName IN nodeNames WHERE nodeName IN $avoid_list)
+        WITH nodeNames, totalCost
         ORDER BY totalCost ASC
         LIMIT 1
-        RETURN
-            [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
+        RETURN nodeNames
     ";
 
     let mut result = graph
-        .execute(query(shortest_path_to_ratting_query).param("from_system_name", from_system_name))
+        .execute(
+            query(shortest_path_to_ratting_query)
+                .param("from_system_name", from_system_name)
+                .param("avoid_list", avoid_systems),
+        )
         .await?;
 
     match result.next().await? {
@@ -579,6 +635,7 @@ pub async fn find_nearest_ratting_system(
 pub async fn find_safest_ratting_system(
     graph: Arc<Graph>,
     from_system_name: String,
+    avoid_systems: Vec<String>,
 ) -> Result<Option<Vec<String>>, Error> {
     let safest_path_to_ratting_query = "
         MATCH (target_systems:System)
@@ -592,15 +649,20 @@ pub async fn find_safest_ratting_system(
             relationshipWeightProperty: 'risk'
         })
         YIELD nodeIds, totalCost
-        WITH nodeIds, totalCost
+        WITH nodeIds, totalCost, [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
+        WHERE NONE(nodeName IN nodeNames WHERE nodeName IN $avoid_list)
+        WITH nodeNames, totalCost
         ORDER BY totalCost ASC
         LIMIT 1
-        RETURN
-            [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
+        RETURN nodeNames
     ";
 
     let mut result = graph
-        .execute(query(safest_path_to_ratting_query).param("from_system_name", from_system_name))
+        .execute(
+            query(safest_path_to_ratting_query)
+                .param("from_system_name", from_system_name)
+                .param("avoid_list", avoid_systems),
+        )
         .await?;
 
     match result.next().await? {
