@@ -456,11 +456,11 @@ pub async fn build_jump_risk_graph(graph: Arc<Graph>) -> Result<String, Error> {
 }
 
 pub async fn drop_system_connections(graph: &Arc<Graph>, system_name: &str) -> Result<(), Error> {
-    let drop_thera_connections = "\
+    let drop_connections_query = "\
         MATCH (:System {name: $system_name})-[r]-()
         DELETE r";
     graph
-        .run(query(drop_thera_connections).param("system_name", system_name))
+        .run(query(drop_connections_query).param("system_name", system_name))
         .await?;
     Ok(())
 }
