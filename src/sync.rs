@@ -110,6 +110,34 @@ pub async fn refresh_eve_scout_system_relations(
         "Successfully processed and saved {} wormhole connections.",
         wormhole_count
     );
+
+    async fn log_final_connections(graph: &Arc<Graph>, system_name: &str) {
+        match database::get_system_connections(graph, system_name).await {
+            Ok(connections) => {
+                if connections.is_empty() {
+                    info!("Final connections for {}: None", system_name);
+                } else {
+                    let conn_details: Vec<String> = connections
+                        .iter()
+                        .map(|c| format!("{} ({})", c.destination, c.jump_type))
+                        .collect();
+                    info!(
+                        "Final connections for {}: [{}]",
+                        system_name,
+                        conn_details.join(", ")
+                    );
+                }
+            }
+            Err(e) => {
+                error!("Failed to get final connections for {}: {}", system_name, e);
+            }
+        }
+    }
+
+    info!("Verifying final connections for key systems after refresh...");
+    log_final_connections(&graph, "Thera").await;
+    log_final_connections(&graph, "Turnur").await;
+
     Ok(())
 }
 

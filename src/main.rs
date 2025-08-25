@@ -7,9 +7,9 @@ use eve_graph::sync::{
     refresh_eve_scout_system_relations, refresh_jump_risks, synchronize_esi_stargates,
     synchronize_esi_systems,
 };
-use serde::Deserialize;
 use neo4rs::Graph;
 use reqwest::Client;
+use serde::Deserialize;
 use tracing::{error, info};
 use warp::hyper::StatusCode;
 use warp::reject::Reject;
@@ -105,6 +105,9 @@ async fn bootstrap(client: Client, graph: Arc<Graph>) -> Result<(), sync::Error>
     synchronize_esi_stargates(client.clone(), graph.clone()).await?;
     info!("Stargate synchronization complete.");
 
+    sever_zarzakh_connections(&graph).await?;
+    info!("Zarzakh connections severed.");
+
     refresh_jump_risks(client.clone(), graph.clone()).await?;
     info!("Jump risk calculation complete.");
 
@@ -172,24 +175,29 @@ struct RouteRequest {
     avoid_systems: Vec<String>,
 }
 
-async fn shortest_route_to_handler(
-    from_system_name: String,
-    to_system_name: String,
-    graph: Arc<Graph>,
-) -> Result<impl Reply, Rejection> {
-    match find_shortest_route(graph, from_system_name, to_system_name)
-        .await
-        .map_err(|e| warp::reject::custom(ApiError(e.into())))?
-    {
+/// Converts an `Option<Vec<String>>` representing a route into a standard `impl Reply`.
+/// Handles `None` by returning a 404 Not Found, and `Some` with a 200 OK and JSON body.
+fn route_to_reply(route_result: Option<Vec<String>>) -> Result<impl Reply, Rejection> {
+    match route_result {
+        Some(route) => Ok(warp::reply::json(&route).into_response()),
         None => {
-            // Return a 404 Not Found, which is more idiomatic for a missing resource (the path).
             let mut res = warp::reply::json(&serde_json::json!({ "error": "route not found" }))
                 .into_response();
             *res.status_mut() = StatusCode::NOT_FOUND;
             Ok(res)
         }
-        Some(route) => Ok(warp::reply::json(&route).into_response()),
     }
+}
+
+async fn shortest_route_to_handler(
+    from_system_name: String,
+    to_system_name: String,
+    graph: Arc<Graph>,
+) -> Result<impl Reply, Rejection> {
+    let route = find_shortest_route(graph, from_system_name, to_system_name)
+        .await
+        .map_err(|e| warp::reject::custom(ApiError(e.into())))?;
+    route_to_reply(route)
 }
 
 async fn safest_route_to_handler(
@@ -206,37 +214,20 @@ async fn safest_route_to_handler(
             .map_err(|e| warp::reject::custom(ApiError(e.into())))?;
     }
 
-    match find_safest_route(graph, from_system_name, to_system_name)
+    let route = find_safest_route(graph, from_system_name, to_system_name)
         .await
-        .map_err(|e| warp::reject::custom(ApiError(e.into())))?
-    {
-        None => {
-            let mut res = warp::reply::json(&serde_json::json!({ "error": "route not found" }))
-                .into_response();
-            *res.status_mut() = StatusCode::NOT_FOUND;
-            Ok(res)
-        }
-        Some(route) => Ok(warp::reply::json(&route).into_response()),
-    }
+        .map_err(|e| warp::reject::custom(ApiError(e.into())))?;
+    route_to_reply(route)
 }
 
 async fn nearest_ratting_system_handler(
     request: RouteRequest,
     graph: Arc<Graph>,
 ) -> Result<impl Reply, Rejection> {
-    match find_nearest_ratting_system(graph, request.from_system_name, request.avoid_systems)
+    let route = find_nearest_ratting_system(graph, request.from_system_name, request.avoid_systems)
         .await
-        .map_err(|e| warp::reject::custom(ApiError(e.into())))?
-    {
-        None => {
-            // Return a 404 Not Found, which is more idiomatic for a missing resource (the path).
-            let mut res = warp::reply::json(&serde_json::json!({ "error": "route not found" }))
-                .into_response();
-            *res.status_mut() = StatusCode::NOT_FOUND;
-            Ok(res)
-        }
-        Some(route) => Ok(warp::reply::json(&route).into_response()),
-    }
+        .map_err(|e| warp::reject::custom(ApiError(e.into())))?;
+    route_to_reply(route)
 }
 
 async fn safest_ratting_system_handler(
@@ -252,19 +243,10 @@ async fn safest_ratting_system_handler(
             .map_err(|e| warp::reject::custom(ApiError(e.into())))?;
     }
 
-    match find_safest_ratting_system(graph, request.from_system_name, request.avoid_systems)
+    let route = find_safest_ratting_system(graph, request.from_system_name, request.avoid_systems)
         .await
-        .map_err(|e| warp::reject::custom(ApiError(e.into())))?
-    {
-        None => {
-            // Return a 404 Not Found, which is more idiomatic for a missing resource (the path).
-            let mut res = warp::reply::json(&serde_json::json!({ "error": "route not found" }))
-                .into_response();
-            *res.status_mut() = StatusCode::NOT_FOUND;
-            Ok(res)
-        }
-        Some(route) => Ok(warp::reply::json(&route).into_response()),
-    }
+        .map_err(|e| warp::reject::custom(ApiError(e.into())))?;
+    route_to_reply(route)
 }
 
 async fn wormholes_refresh_handler(

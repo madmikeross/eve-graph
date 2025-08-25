@@ -197,6 +197,12 @@ pub async fn get_saved_stargate_count(graph: &Arc<Graph>) -> Result<i64, Error> 
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct SystemConnection {
+    pub destination: String,
+    pub jump_type: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Stargate {
     pub destination_stargate_id: i64,
     pub destination_system_id: i64,
@@ -261,7 +267,7 @@ async fn create_wormhole_jump(
     let wormhole_connection = "
         MATCH (source:System {system_id: $source_system_id})
         MATCH (dest:System {system_id: $dest_system_id})
-        CREATE (source)-[:JUMP {cost: 1, type: 'wormhole'}]->(dest)";
+        CREATE (source)-[:JUMP {cost: 1, type: 'wormhole', risk: 1.0}]->(dest)";
 
     graph
         .run(
@@ -392,7 +398,7 @@ pub async fn create_system_jump(
     let inbound_connection = "\
         MATCH (source:System {system_id: $source_system_id})
         MATCH (dest:System {system_id: $dest_system_id})
-        CREATE (source)-[:JUMP {cost: 1, type: 'stargate'}]->(dest)";
+        CREATE (source)-[:JUMP {cost: 1, type: 'stargate', risk: 1.0}]->(dest)";
 
     graph
         .run(
@@ -515,6 +521,41 @@ pub async fn drop_wormhole_connections_for_system(
     Ok(())
 }
 
+pub async fn sever_zarzakh_connections(graph: &Arc<Graph>) -> Result<(), Error> {
+    info!("Severing all stargate connections to and from Zarzakh.");
+    let sever_query = "
+        MATCH (:System {name: 'Zarzakh'})-[r:JUMP]-(:System)
+        WHERE r.type = 'stargate'
+        DELETE r
+    ";
+    graph.run(query(sever_query)).await?;
+    info!("Successfully severed Zarzakh connections.");
+    Ok(())
+}
+
+pub async fn get_system_connections(
+    graph: &Arc<Graph>,
+    system_name: &str,
+) -> Result<Vec<SystemConnection>, Error> {
+    let connections_query = "
+        MATCH (:System {name: $system_name})-[r:JUMP]-(d:System)
+        RETURN d.name AS destination, r.type AS jump_type
+    ";
+    let mut result = graph
+        .execute(query(connections_query).param("system_name", system_name))
+        .await?;
+
+    let mut connections = Vec::new();
+    while let Some(row) = result.next().await? {
+        let jump_type: Option<String> = row.get("jump_type")?;
+        connections.push(SystemConnection {
+            destination: row.get("destination")?,
+            jump_type: jump_type.unwrap_or_else(|| "unknown".to_string()),
+        });
+    }
+    Ok(connections)
+}
+
 pub async fn refresh_jump_cost_graph(graph: Arc<Graph>) -> Result<(), Error> {
     if graph_exists(&graph, String::from("system-map")).await? {
         drop_system_jump_graph(&graph).await?;
@@ -543,9 +584,8 @@ pub async fn find_shortest_route(
             targetNode: target,
             relationshipWeightProperty: 'cost'
         })
-        YIELD index, sourceNode, targetNode, totalCost, nodeIds, costs, path
-        RETURN
-            [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
+        YIELD nodeIds
+        RETURN [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
     ";
 
     let mut result = graph
@@ -574,9 +614,8 @@ pub async fn find_safest_route(
             targetNode: target,
             relationshipWeightProperty: 'risk'
         })
-        YIELD index, sourceNode, targetNode, totalCost, nodeIds, costs, path
-        RETURN
-            [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
+        YIELD nodeIds
+        RETURN [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
     ";
 
     let mut result = graph
