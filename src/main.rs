@@ -35,13 +35,15 @@ async fn main() {
     }
 
     // --- Define API Routes ---
-    let shortest_route = warp::path!("shortest-route" / String / "to" / String)
-        .and(warp::get())
+    let shortest_route = warp::path!("shortest-route")
+        .and(warp::post())
+        .and(warp::body::json())
         .and(with_graph(graph.clone()))
         .and_then(shortest_route_to_handler);
 
-    let safest_route = warp::path!("safest-route" / String / "to" / String)
-        .and(warp::get())
+    let safest_route = warp::path!("safest-route")
+        .and(warp::post())
+        .and(warp::body::json())
         .and(with_graph(graph.clone()))
         .and_then(safest_route_to_handler);
 
@@ -117,8 +119,11 @@ async fn bootstrap(client: Client, graph: Arc<Graph>) -> Result<(), sync::Error>
     refresh_eve_scout_system_relations(client, graph.clone()).await?;
     info!("EVE Scout data refreshed.");
 
-    refresh_jump_cost_graph(graph).await?;
+    refresh_jump_cost_graph(graph.clone()).await?;
     info!("Jump cost graph projection complete.");
+
+    refresh_jump_risk_graph(graph).await?;
+    info!("Jump risk graph projection refreshed.");
 
     info!("Bootstrap complete.");
     Ok(())
@@ -175,6 +180,14 @@ struct RouteRequest {
     avoid_systems: Vec<String>,
 }
 
+#[derive(Deserialize)]
+struct PointToPointRouteRequest {
+    from_system_name: String,
+    to_system_name: String,
+    #[serde(default)]
+    avoid_systems: Vec<String>,
+}
+
 /// Converts an `Option<Vec<String>>` representing a route into a standard `impl Reply`.
 /// Handles `None` by returning a 404 Not Found, and `Some` with a 200 OK and JSON body.
 fn route_to_reply(route_result: Option<Vec<String>>) -> Result<impl Reply, Rejection> {
@@ -190,19 +203,22 @@ fn route_to_reply(route_result: Option<Vec<String>>) -> Result<impl Reply, Rejec
 }
 
 async fn shortest_route_to_handler(
-    from_system_name: String,
-    to_system_name: String,
+    request: PointToPointRouteRequest,
     graph: Arc<Graph>,
 ) -> Result<impl Reply, Rejection> {
-    let route = find_shortest_route(graph, from_system_name, to_system_name)
-        .await
-        .map_err(|e| warp::reject::custom(ApiError(e.into())))?;
+    let route = find_shortest_route(
+        graph,
+        request.from_system_name,
+        request.to_system_name,
+        request.avoid_systems,
+    )
+    .await
+    .map_err(|e| warp::reject::custom(ApiError(e.into())))?;
     route_to_reply(route)
 }
 
 async fn safest_route_to_handler(
-    from_system_name: String,
-    to_system_name: String,
+    request: PointToPointRouteRequest,
     graph: Arc<Graph>,
 ) -> Result<impl Reply, Rejection> {
     let exists = graph_exists(&graph, String::from("jump-risk"))
@@ -214,9 +230,14 @@ async fn safest_route_to_handler(
             .map_err(|e| warp::reject::custom(ApiError(e.into())))?;
     }
 
-    let route = find_safest_route(graph, from_system_name, to_system_name)
-        .await
-        .map_err(|e| warp::reject::custom(ApiError(e.into())))?;
+    let route = find_safest_route(
+        graph,
+        request.from_system_name,
+        request.to_system_name,
+        request.avoid_systems,
+    )
+    .await
+    .map_err(|e| warp::reject::custom(ApiError(e.into())))?;
     route_to_reply(route)
 }
 
@@ -256,7 +277,10 @@ async fn wormholes_refresh_handler(
     refresh_eve_scout_system_relations(client, graph.clone())
         .await
         .map_err(|e| warp::reject::custom(ApiError(e)))?;
-    refresh_jump_cost_graph(graph)
+    refresh_jump_cost_graph(graph.clone())
+        .await
+        .map_err(|e| warp::reject::custom(ApiError(e.into())))?;
+    refresh_jump_risk_graph(graph)
         .await
         .map_err(|e| warp::reject::custom(ApiError(e.into())))?;
     Ok(reply())
@@ -289,7 +313,10 @@ async fn stargates_refresh_handler(
     synchronize_esi_stargates(client, graph.clone())
         .await
         .map_err(|e| warp::reject::custom(ApiError(e)))?;
-    refresh_jump_cost_graph(graph)
+    refresh_jump_cost_graph(graph.clone())
+        .await
+        .map_err(|e| warp::reject::custom(ApiError(e.into())))?;
+    refresh_jump_risk_graph(graph)
         .await
         .map_err(|e| warp::reject::custom(ApiError(e.into())))?;
     Ok(reply())

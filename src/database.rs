@@ -576,23 +576,58 @@ pub async fn find_shortest_route(
     graph: Arc<Graph>,
     from_system_name: String,
     to_system_name: String,
+    avoid_systems: Vec<String>,
 ) -> Result<Option<Vec<String>>, Error> {
-    let shortest_path_query = "\
+    // If no systems to avoid, use simple Dijkstra
+    if avoid_systems.is_empty() {
+        let shortest_path_query = "\
+            MATCH (source:System {name: $from_system_name}), (target:System {name: $to_system_name})
+            CALL gds.shortestPath.dijkstra.stream('system-map', {
+                sourceNode: source,
+                targetNode: target,
+                relationshipWeightProperty: 'cost'
+            })
+            YIELD nodeIds
+            RETURN [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
+        ";
+
+        let mut result = graph
+            .execute(
+                query(shortest_path_query)
+                    .param("from_system_name", from_system_name)
+                    .param("to_system_name", to_system_name),
+            )
+            .await?;
+
+        return match result.next().await? {
+            Some(row) => row.get("nodeNames").map_err(Error::from),
+            None => Ok(None),
+        };
+    }
+
+    // If systems to avoid, use Yen's k-shortest paths to find alternatives
+    let yens_path_query = "\
         MATCH (source:System {name: $from_system_name}), (target:System {name: $to_system_name})
-        CALL gds.shortestPath.dijkstra.stream('system-map', {
+        CALL gds.shortestPath.yens.stream('system-map', {
             sourceNode: source,
             targetNode: target,
+            k: 20,
             relationshipWeightProperty: 'cost'
         })
-        YIELD nodeIds
-        RETURN [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
+        YIELD index, nodeIds, totalCost
+        WITH index, nodeIds, totalCost, [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
+        WHERE NONE(nodeName IN nodeNames WHERE nodeName IN $avoid_list)
+        RETURN nodeNames
+        ORDER BY totalCost ASC
+        LIMIT 1
     ";
 
     let mut result = graph
         .execute(
-            query(shortest_path_query)
+            query(yens_path_query)
                 .param("from_system_name", from_system_name)
-                .param("to_system_name", to_system_name),
+                .param("to_system_name", to_system_name)
+                .param("avoid_list", avoid_systems),
         )
         .await?;
 
@@ -606,23 +641,58 @@ pub async fn find_safest_route(
     graph: Arc<Graph>,
     from_system_name: String,
     to_system_name: String,
+    avoid_systems: Vec<String>,
 ) -> Result<Option<Vec<String>>, Error> {
-    let shortest_path_query = "\
+    // If no systems to avoid, use simple Dijkstra
+    if avoid_systems.is_empty() {
+        let shortest_path_query = "\
+            MATCH (source:System {name: $from_system_name}), (target:System {name: $to_system_name})
+            CALL gds.shortestPath.dijkstra.stream('jump-risk', {
+                sourceNode: source,
+                targetNode: target,
+                relationshipWeightProperty: 'risk'
+            })
+            YIELD nodeIds
+            RETURN [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
+        ";
+
+        let mut result = graph
+            .execute(
+                query(shortest_path_query)
+                    .param("from_system_name", from_system_name)
+                    .param("to_system_name", to_system_name),
+            )
+            .await?;
+
+        return match result.next().await? {
+            Some(row) => row.get("nodeNames").map_err(Error::from),
+            None => Ok(None),
+        };
+    }
+
+    // If systems to avoid, use Yen's k-shortest paths to find alternatives
+    let yens_path_query = "\
         MATCH (source:System {name: $from_system_name}), (target:System {name: $to_system_name})
-        CALL gds.shortestPath.dijkstra.stream('jump-risk', {
+        CALL gds.shortestPath.yens.stream('jump-risk', {
             sourceNode: source,
             targetNode: target,
+            k: 20,
             relationshipWeightProperty: 'risk'
         })
-        YIELD nodeIds
-        RETURN [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
+        YIELD index, nodeIds, totalCost
+        WITH index, nodeIds, totalCost, [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
+        WHERE NONE(nodeName IN nodeNames WHERE nodeName IN $avoid_list)
+        RETURN nodeNames
+        ORDER BY totalCost ASC
+        LIMIT 1
     ";
 
     let mut result = graph
         .execute(
-            query(shortest_path_query)
+            query(yens_path_query)
                 .param("from_system_name", from_system_name)
-                .param("to_system_name", to_system_name),
+                .param("to_system_name", to_system_name)
+                .param("avoid_list", avoid_systems),
         )
         .await?;
 
