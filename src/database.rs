@@ -197,6 +197,12 @@ pub async fn get_saved_stargate_count(graph: &Arc<Graph>) -> Result<i64, Error> 
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct SystemConnection {
+    pub destination: String,
+    pub jump_type: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Stargate {
     pub destination_stargate_id: i64,
     pub destination_system_id: i64,
@@ -249,8 +255,28 @@ pub async fn save_wormhole(
     out_system_id: i64,
 ) -> Result<(), Error> {
     debug!("Saving wormhole from {} to {}", in_system_id, out_system_id);
-    create_system_jump(graph.clone(), in_system_id, out_system_id).await?;
-    create_system_jump(graph.clone(), out_system_id, in_system_id).await
+    create_wormhole_jump(graph.clone(), in_system_id, out_system_id).await?;
+    create_wormhole_jump(graph.clone(), out_system_id, in_system_id).await
+}
+
+async fn create_wormhole_jump(
+    graph: Arc<Graph>,
+    source_system: i64,
+    dest_system: i64,
+) -> Result<(), Error> {
+    let wormhole_connection = "
+        MATCH (source:System {system_id: $source_system_id})
+        MATCH (dest:System {system_id: $dest_system_id})
+        CREATE (source)-[:JUMP {cost: 1, type: 'wormhole', risk: 1.0}]->(dest)";
+
+    graph
+        .run(
+            query(wormhole_connection)
+                .param("source_system_id", source_system)
+                .param("dest_system_id", dest_system),
+        )
+        .await?;
+    Ok(())
 }
 
 pub async fn set_last_hour_system_jumps(
@@ -372,7 +398,7 @@ pub async fn create_system_jump(
     let inbound_connection = "\
         MATCH (source:System {system_id: $source_system_id})
         MATCH (dest:System {system_id: $dest_system_id})
-        CREATE (source)-[:JUMP {cost: 1}]->(dest)";
+        CREATE (source)-[:JUMP {cost: 1, type: 'stargate', risk: 1.0}]->(dest)";
 
     graph
         .run(
@@ -455,14 +481,79 @@ pub async fn build_jump_risk_graph(graph: Arc<Graph>) -> Result<String, Error> {
     Ok(row.get("graphName")?)
 }
 
-pub async fn drop_system_connections(graph: &Arc<Graph>, system_name: &str) -> Result<(), Error> {
-    let drop_thera_connections = "\
-        MATCH (:System {name: $system_name})-[r]-()
-        DELETE r";
+pub async fn drop_wormhole_connections_for_system(
+    graph: &Arc<Graph>,
+    system_name: &str,
+) -> Result<(), Error> {
+    // Step 1: Find and log the connections that will be deleted.
+    let find_query = "
+        MATCH (s:System {name: $system_name})-[r:JUMP {type: 'wormhole'}]-(d:System)
+        RETURN s.name AS source, d.name AS destination
+    ";
+    let mut result = graph
+        .execute(query(find_query).param("system_name", system_name))
+        .await?;
+
+    let mut deleted_count = 0;
+    while let Some(row) = result.next().await? {
+        let source: String = row.get("source")?;
+        let destination: String = row.get("destination")?;
+        info!(
+            "Deleting wormhole connection: {} <-> {}",
+            source, destination
+        );
+        deleted_count += 1;
+    }
+
+    if deleted_count == 0 {
+        info!("No wormhole connections to delete for {}.", system_name);
+        return Ok(());
+    }
+
+    // Step 2: Delete the connections.
+    let delete_query = "
+        MATCH (:System {name: $system_name})-[r:JUMP {type: 'wormhole'}]-()
+        DELETE r
+    ";
     graph
-        .run(query(drop_thera_connections).param("system_name", system_name))
+        .run(query(delete_query).param("system_name", system_name))
         .await?;
     Ok(())
+}
+
+pub async fn sever_zarzakh_connections(graph: &Arc<Graph>) -> Result<(), Error> {
+    info!("Severing all stargate connections to and from Zarzakh.");
+    let sever_query = "
+        MATCH (:System {name: 'Zarzakh'})-[r:JUMP]-(:System)
+        WHERE r.type = 'stargate'
+        DELETE r
+    ";
+    graph.run(query(sever_query)).await?;
+    info!("Successfully severed Zarzakh connections.");
+    Ok(())
+}
+
+pub async fn get_system_connections(
+    graph: &Arc<Graph>,
+    system_name: &str,
+) -> Result<Vec<SystemConnection>, Error> {
+    let connections_query = "
+        MATCH (:System {name: $system_name})-[r:JUMP]-(d:System)
+        RETURN d.name AS destination, r.type AS jump_type
+    ";
+    let mut result = graph
+        .execute(query(connections_query).param("system_name", system_name))
+        .await?;
+
+    let mut connections = Vec::new();
+    while let Some(row) = result.next().await? {
+        let jump_type: Option<String> = row.get("jump_type")?;
+        connections.push(SystemConnection {
+            destination: row.get("destination")?,
+            jump_type: jump_type.unwrap_or_else(|| "unknown".to_string()),
+        });
+    }
+    Ok(connections)
 }
 
 pub async fn refresh_jump_cost_graph(graph: Arc<Graph>) -> Result<(), Error> {
@@ -485,24 +576,58 @@ pub async fn find_shortest_route(
     graph: Arc<Graph>,
     from_system_name: String,
     to_system_name: String,
+    avoid_systems: Vec<String>,
 ) -> Result<Option<Vec<String>>, Error> {
-    let shortest_path_query = "\
+    // If no systems to avoid, use simple Dijkstra
+    if avoid_systems.is_empty() {
+        let shortest_path_query = "\
+            MATCH (source:System {name: $from_system_name}), (target:System {name: $to_system_name})
+            CALL gds.shortestPath.dijkstra.stream('system-map', {
+                sourceNode: source,
+                targetNode: target,
+                relationshipWeightProperty: 'cost'
+            })
+            YIELD nodeIds
+            RETURN [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
+        ";
+
+        let mut result = graph
+            .execute(
+                query(shortest_path_query)
+                    .param("from_system_name", from_system_name)
+                    .param("to_system_name", to_system_name),
+            )
+            .await?;
+
+        return match result.next().await? {
+            Some(row) => row.get("nodeNames").map_err(Error::from),
+            None => Ok(None),
+        };
+    }
+
+    // If systems to avoid, use Yen's k-shortest paths to find alternatives
+    let yens_path_query = "\
         MATCH (source:System {name: $from_system_name}), (target:System {name: $to_system_name})
-        CALL gds.shortestPath.dijkstra.stream('system-map', {
+        CALL gds.shortestPath.yens.stream('system-map', {
             sourceNode: source,
             targetNode: target,
+            k: 20,
             relationshipWeightProperty: 'cost'
         })
-        YIELD index, sourceNode, targetNode, totalCost, nodeIds, costs, path
-        RETURN
-            [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
+        YIELD index, nodeIds, totalCost
+        WITH index, nodeIds, totalCost, [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
+        WHERE NONE(nodeName IN nodeNames WHERE nodeName IN $avoid_list)
+        RETURN nodeNames
+        ORDER BY totalCost ASC
+        LIMIT 1
     ";
 
     let mut result = graph
         .execute(
-            query(shortest_path_query)
+            query(yens_path_query)
                 .param("from_system_name", from_system_name)
-                .param("to_system_name", to_system_name),
+                .param("to_system_name", to_system_name)
+                .param("avoid_list", avoid_systems),
         )
         .await?;
 
@@ -516,24 +641,136 @@ pub async fn find_safest_route(
     graph: Arc<Graph>,
     from_system_name: String,
     to_system_name: String,
+    avoid_systems: Vec<String>,
 ) -> Result<Option<Vec<String>>, Error> {
-    let shortest_path_query = "\
+    // If no systems to avoid, use simple Dijkstra
+    if avoid_systems.is_empty() {
+        let shortest_path_query = "\
+            MATCH (source:System {name: $from_system_name}), (target:System {name: $to_system_name})
+            CALL gds.shortestPath.dijkstra.stream('jump-risk', {
+                sourceNode: source,
+                targetNode: target,
+                relationshipWeightProperty: 'risk'
+            })
+            YIELD nodeIds
+            RETURN [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
+        ";
+
+        let mut result = graph
+            .execute(
+                query(shortest_path_query)
+                    .param("from_system_name", from_system_name)
+                    .param("to_system_name", to_system_name),
+            )
+            .await?;
+
+        return match result.next().await? {
+            Some(row) => row.get("nodeNames").map_err(Error::from),
+            None => Ok(None),
+        };
+    }
+
+    // If systems to avoid, use Yen's k-shortest paths to find alternatives
+    let yens_path_query = "\
         MATCH (source:System {name: $from_system_name}), (target:System {name: $to_system_name})
+        CALL gds.shortestPath.yens.stream('jump-risk', {
+            sourceNode: source,
+            targetNode: target,
+            k: 20,
+            relationshipWeightProperty: 'risk'
+        })
+        YIELD index, nodeIds, totalCost
+        WITH index, nodeIds, totalCost, [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
+        WHERE NONE(nodeName IN nodeNames WHERE nodeName IN $avoid_list)
+        RETURN nodeNames
+        ORDER BY totalCost ASC
+        LIMIT 1
+    ";
+
+    let mut result = graph
+        .execute(
+            query(yens_path_query)
+                .param("from_system_name", from_system_name)
+                .param("to_system_name", to_system_name)
+                .param("avoid_list", avoid_systems),
+        )
+        .await?;
+
+    match result.next().await? {
+        Some(row) => row.get("nodeNames").map_err(Error::from),
+        None => Ok(None),
+    }
+}
+
+pub async fn find_nearest_ratting_system(
+    graph: Arc<Graph>,
+    from_system_name: String,
+    avoid_systems: Vec<String>,
+) -> Result<Option<Vec<String>>, Error> {
+    let shortest_path_to_ratting_query = "
+        MATCH (target_systems:System)
+        WHERE target_systems.security_status >= 0.05 AND target_systems.security_status < 0.15
+        WITH COLLECT(target_systems) AS targets
+        MATCH (source:System {name: $from_system_name})
+        UNWIND targets AS target
+        CALL gds.shortestPath.dijkstra.stream('system-map', {
+            sourceNode: source,
+            targetNode: target,
+            relationshipWeightProperty: 'cost'
+        })
+        YIELD nodeIds, totalCost
+        WITH nodeIds, totalCost, [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
+        WHERE NONE(nodeName IN nodeNames WHERE nodeName IN $avoid_list)
+        WITH nodeNames, totalCost
+        ORDER BY totalCost ASC
+        LIMIT 1
+        RETURN nodeNames
+    ";
+
+    let mut result = graph
+        .execute(
+            query(shortest_path_to_ratting_query)
+                .param("from_system_name", from_system_name)
+                .param("avoid_list", avoid_systems),
+        )
+        .await?;
+
+    match result.next().await? {
+        Some(row) => row.get("nodeNames").map_err(Error::from),
+        None => Ok(None),
+    }
+}
+
+pub async fn find_safest_ratting_system(
+    graph: Arc<Graph>,
+    from_system_name: String,
+    avoid_systems: Vec<String>,
+) -> Result<Option<Vec<String>>, Error> {
+    let safest_path_to_ratting_query = "
+        MATCH (target_systems:System)
+        WHERE target_systems.security_status >= 0.05 AND target_systems.security_status < 0.15
+        WITH COLLECT(target_systems) AS targets
+        MATCH (source:System {name: $from_system_name})
+        UNWIND targets AS target
         CALL gds.shortestPath.dijkstra.stream('jump-risk', {
             sourceNode: source,
             targetNode: target,
             relationshipWeightProperty: 'risk'
         })
-        YIELD index, sourceNode, targetNode, totalCost, nodeIds, costs, path
-        RETURN
-            [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
+        YIELD nodeIds, totalCost
+        WITH nodeIds, totalCost, [nodeId IN nodeIds | gds.util.asNode(nodeId).name] AS nodeNames
+        WHERE NONE(nodeName IN nodeNames WHERE nodeName IN $avoid_list)
+        WITH nodeNames, totalCost
+        ORDER BY totalCost ASC
+        LIMIT 1
+        RETURN nodeNames
     ";
 
     let mut result = graph
         .execute(
-            query(shortest_path_query)
+            query(safest_path_to_ratting_query)
                 .param("from_system_name", from_system_name)
-                .param("to_system_name", to_system_name),
+                .param("avoid_list", avoid_systems),
         )
         .await?;
 

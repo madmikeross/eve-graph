@@ -67,29 +67,77 @@ pub async fn refresh_eve_scout_system_relations(
     client: Client,
     graph: Arc<Graph>,
 ) -> Result<(), Error> {
-    info!("Refreshing EVE Scout public connections");
-    database::drop_system_connections(&graph, "Thera")
+    info!("Starting EVE Scout public connections refresh...");
+
+    info!("Dropping existing connections for Thera...");
+    database::drop_wormhole_connections_for_system(&graph, "Thera")
         .await
         .map_err(Error::Target)?;
-    database::drop_system_connections(&graph, "Turnur")
+
+    info!("Dropping existing connections for Turnur...");
+    database::drop_wormhole_connections_for_system(&graph, "Turnur")
         .await
         .map_err(Error::Target)?;
+
+    info!("Fetching new signatures from EVE Scout...");
+    let signatures = eve_scout::get_public_signatures(client.clone()).await?;
+    info!("Fetched {} total signatures.", signatures.len());
+
+    let wormholes: Vec<_> = signatures
+        .into_iter()
+        .filter(|sig| sig.signature_type == "wormhole")
+        .collect();
+    info!("Found {} wormhole signatures to process.", wormholes.len());
+
+    if wormholes.is_empty() {
+        info!("No new wormholes to add. Refresh complete.");
+        return Ok(());
+    }
 
     let mut set = JoinSet::new();
-
-    eve_scout::get_public_signatures(client.clone())
-        .await?
-        .iter()
-        .filter(|sig| sig.signature_type == "wormhole")
-        .for_each(|wormhole| {
-            set.spawn(database::save_wormhole(
-                graph.clone(),
-                wormhole.in_system_id,
-                wormhole.out_system_id,
-            ));
+    let wormhole_count = wormholes.len();
+    for wormhole in wormholes {
+        let graph = graph.clone();
+        set.spawn(async move {
+            database::save_wormhole(graph, wormhole.in_system_id, wormhole.out_system_id)
+                .await
+                .map_err(Error::Target)
         });
+    }
 
-    error_if_any_member_has_error(&mut set).await.unwrap()?;
+    join_all_and_check_errors(&mut set).await?;
+    info!(
+        "Successfully processed and saved {} wormhole connections.",
+        wormhole_count
+    );
+
+    async fn log_final_connections(graph: &Arc<Graph>, system_name: &str) {
+        match database::get_system_connections(graph, system_name).await {
+            Ok(connections) => {
+                if connections.is_empty() {
+                    info!("Final connections for {}: None", system_name);
+                } else {
+                    let conn_details: Vec<String> = connections
+                        .iter()
+                        .map(|c| format!("{} ({})", c.destination, c.jump_type))
+                        .collect();
+                    info!(
+                        "Final connections for {}: [{}]",
+                        system_name,
+                        conn_details.join(", ")
+                    );
+                }
+            }
+            Err(e) => {
+                error!("Failed to get final connections for {}: {}", system_name, e);
+            }
+        }
+    }
+
+    info!("Verifying final connections for key systems after refresh...");
+    log_final_connections(&graph, "Thera").await;
+    log_final_connections(&graph, "Turnur").await;
+
     Ok(())
 }
 
@@ -115,7 +163,7 @@ async fn pull_stargates(
         });
     }
 
-    error_if_any_member_has_error(&mut set).await.unwrap()
+    join_all_and_check_errors(&mut set).await
 }
 
 pub async fn synchronize_esi_systems(client: Client, graph: Arc<Graph>) -> Result<(), Error> {
@@ -230,7 +278,7 @@ async fn pull_systems(
     for system_id in system_ids {
         set.spawn(pull_system(client.clone(), graph.clone(), system_id));
     }
-    error_if_any_member_has_error(&mut set).await.unwrap()
+    join_all_and_check_errors(&mut set).await
 }
 
 async fn pull_system(client: Client, graph: Arc<Graph>, system_id: i64) -> Result<(), Error> {
@@ -240,15 +288,17 @@ async fn pull_system(client: Client, graph: Arc<Graph>, system_id: i64) -> Resul
     Ok(())
 }
 
-async fn error_if_any_member_has_error<T: 'static>(
-    set: &mut JoinSet<Result<(), T>>,
-) -> Option<Result<(), T>> {
+/// Iterates through a JoinSet, awaiting each task.
+/// If any task panicked or returned an error, this function returns the first error encountered.
+async fn join_all_and_check_errors(set: &mut JoinSet<Result<(), Error>>) -> Result<(), Error> {
     while let Some(res) = set.join_next().await {
-        if let Err(e) = res.unwrap() {
-            return Some(Err(e));
-        }
+        // res is Result<Result<(), Error>, JoinError>
+        // First, handle JoinError from a panicked task, converting it to our Error type.
+        let task_result = res?;
+        // Then, handle the business logic error from within the task.
+        task_result?;
     }
-    Some(Ok(()))
+    Ok(())
 }
 
 pub async fn pull_system_kills(client: Client, graph: Arc<Graph>) -> Result<i32, Error> {
@@ -258,20 +308,19 @@ pub async fn pull_system_kills(client: Client, graph: Arc<Graph>) -> Result<i32,
     let mut set = JoinSet::new();
 
     system_kills.iter().for_each(|system_kill| {
-        set.spawn(database::set_last_hour_system_kills(
-            graph.clone(),
-            system_kill.system_id,
-            system_kill.ship_kills,
-        ));
+        let graph = graph.clone();
+        let system_id = system_kill.system_id;
+        let ship_kills = system_kill.ship_kills;
+        set.spawn(async move {
+            database::set_last_hour_system_kills(graph, system_id, ship_kills)
+                .await
+                .map_err(Error::Target)
+        });
     });
 
-    error_if_any_member_has_error(&mut set)
-        .await
-        .unwrap()
-        .map(|_| galaxy_kills)
-        .map_err(Error::Target)
+    join_all_and_check_errors(&mut set).await?;
+    Ok(galaxy_kills)
 }
-
 pub async fn pull_last_hour_of_jumps(client: Client, graph: Arc<Graph>) -> Result<i32, Error> {
     let system_jumps = esi::get_system_jumps(&client).await?;
     let galaxy_jumps: i32 = system_jumps.iter().map(|s| s.ship_jumps).sum();
@@ -279,20 +328,19 @@ pub async fn pull_last_hour_of_jumps(client: Client, graph: Arc<Graph>) -> Resul
     let mut set = JoinSet::new();
 
     system_jumps.iter().for_each(|system_jump| {
-        set.spawn(database::set_last_hour_system_jumps(
-            graph.clone(),
-            system_jump.system_id,
-            system_jump.ship_jumps,
-        ));
+        let graph = graph.clone();
+        let system_id = system_jump.system_id;
+        let ship_jumps = system_jump.ship_jumps;
+        set.spawn(async move {
+            database::set_last_hour_system_jumps(graph, system_id, ship_jumps)
+                .await
+                .map_err(Error::Target)
+        });
     });
 
-    error_if_any_member_has_error(&mut set)
-        .await
-        .unwrap()
-        .map(|_| galaxy_jumps)
-        .map_err(Error::Target)
+    join_all_and_check_errors(&mut set).await?;
+    Ok(galaxy_jumps)
 }
-
 pub async fn refresh_jump_risks(client: Client, graph: Arc<Graph>) -> Result<(), Error> {
     info!("Refreshing system jump risks");
     let galaxy_kills = pull_system_kills(client.clone(), graph.clone()).await?;
@@ -307,17 +355,15 @@ pub async fn refresh_jump_risks(client: Client, graph: Arc<Graph>) -> Result<(),
     };
 
     system_ids.iter().for_each(|&system_id| {
-        set.spawn(database::set_system_jump_risk(
-            graph.clone(),
-            system_id,
-            baseline_jump_risk,
-        ));
+        let graph = graph.clone();
+        set.spawn(async move {
+            database::set_system_jump_risk(graph, system_id, baseline_jump_risk)
+                .await
+                .map_err(Error::Target)
+        });
     });
 
-    error_if_any_member_has_error(&mut set)
-        .await
-        .unwrap()
-        .map_err(Error::Target)
+    join_all_and_check_errors(&mut set).await
 }
 
 #[instrument(skip(client, graph), fields(stargate_id = %stargate_id))]
